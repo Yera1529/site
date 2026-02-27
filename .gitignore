@@ -1,0 +1,27 @@
+# Dependencies
+node_modules/
+__pycache__/
+*.pyc
+
+# Environment
+.env
+.env.local
+frontend/.env.local
+
+# Build
+.next/
+frontend/.next/
+frontend/out/
+
+# Storage
+backend/storage/uploads/
+backend/storage/generated/
+backend/storage/chroma_db/
+
+# IDE
+.vscode/
+.idea/
+
+# OS
+.DS_Store
+Thumbs.db

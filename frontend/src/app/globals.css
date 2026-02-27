@@ -1,0 +1,93 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+@layer base {
+  body {
+    @apply bg-white text-gray-900 antialiased;
+    font-family: 'Inter', 'Segoe UI', system-ui, sans-serif;
+  }
+}
+
+/* TipTap editor styles */
+.tiptap {
+  @apply outline-none min-h-[400px] px-10 py-8;
+  font-family: 'Times New Roman', 'Georgia', serif;
+  font-size: 14pt;
+  line-height: 1.5;
+}
+
+.tiptap h1 {
+  @apply text-xl font-bold mb-3 mt-5;
+  font-family: 'Times New Roman', 'Georgia', serif;
+  font-size: 16pt;
+}
+
+.tiptap h2 {
+  @apply text-lg font-bold mb-2 mt-4;
+  font-family: 'Times New Roman', 'Georgia', serif;
+  font-size: 14pt;
+}
+
+.tiptap h3 {
+  @apply text-base font-semibold mb-2 mt-3;
+  font-family: 'Times New Roman', 'Georgia', serif;
+  font-size: 14pt;
+}
+
+.tiptap p {
+  @apply mb-1 leading-relaxed;
+  text-indent: 0;
+}
+
+.tiptap ul {
+  @apply list-disc ml-6 mb-2;
+}
+
+.tiptap ol {
+  @apply list-decimal ml-6 mb-2;
+}
+
+.tiptap li {
+  @apply mb-1;
+}
+
+.tiptap li p {
+  @apply mb-0;
+  text-indent: 0;
+}
+
+.tiptap blockquote {
+  @apply border-l-4 border-brand-300 pl-4 italic my-3 text-gray-600;
+}
+
+.tiptap a {
+  @apply text-brand-600 underline;
+}
+
+.tiptap p.is-editor-empty:first-child::before {
+  @apply text-gray-400 float-left h-0 pointer-events-none;
+  content: attr(data-placeholder);
+}
+
+/* Custom scrollbar */
+::-webkit-scrollbar {
+  width: 6px;
+}
+
+::-webkit-scrollbar-track {
+  @apply bg-transparent;
+}
+
+::-webkit-scrollbar-thumb {
+  @apply bg-gray-300 rounded-full;
+}
+
+::-webkit-scrollbar-thumb:hover {
+  @apply bg-gray-400;
+}
+
+/* Govt-style top bar gradient */
+.govt-bar {
+  background: linear-gradient(135deg, #001a66 0%, #0033aa 50%, #004aad 100%);
+}
