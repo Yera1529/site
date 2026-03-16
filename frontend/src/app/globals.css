@@ -1,55 +1,301 @@
+@import url('https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800&display=swap');
 @tailwind base;
 @tailwind components;
 @tailwind utilities;
 
+/* ──────────────────────────────────────────────────────────────────────────
+   DESIGN SYSTEM — ПредставлениеAi МВД РК
+   Premium dark-government aesthetic with glassmorphism + micro-animations
+   ────────────────────────────────────────────────────────────────────────── */
+
+:root {
+  --brand-50: #e8eef8;
+  --brand-100: #c5d4ee;
+  --brand-500: #3366bf;
+  --brand-600: #0033aa;
+  --brand-700: #002d96;
+  --brand-900: #001a66;
+  --brand-950: #000d40;
+
+  --glass-bg: rgba(255, 255, 255, 0.07);
+  --glass-border: rgba(255, 255, 255, 0.12);
+  --glass-shadow: 0 8px 32px rgba(0, 20, 80, 0.25);
+
+  --transition-smooth: cubic-bezier(0.4, 0, 0.2, 1);
+}
+
+/* ── Base ─────────────────────────────────────────────────────────────── */
 @layer base {
+  * {
+    box-sizing: border-box;
+  }
+
+  html {
+    scroll-behavior: smooth;
+  }
+
   body {
-    @apply bg-white text-gray-900 antialiased;
     font-family: 'Inter', 'Segoe UI', system-ui, sans-serif;
+    @apply bg-slate-50 text-gray-900 antialiased;
+    background-image:
+      radial-gradient(ellipse at 20% 0%, rgba(0, 51, 170, 0.04) 0%, transparent 60%),
+      radial-gradient(ellipse at 80% 100%, rgba(0, 26, 102, 0.03) 0%, transparent 60%);
+    min-height: 100vh;
+  }
+
+  ::selection {
+    @apply bg-brand-200 text-brand-900;
   }
 }
 
-/* TipTap editor styles */
+/* ── Government Top Bar ─────────────────────────────────────────────── */
+.govt-bar {
+  background: linear-gradient(135deg, #000d40 0%, #001a66 35%, #0033aa 70%, #0044cc 100%);
+  box-shadow:
+    0 1px 0 rgba(255, 255, 255, 0.08) inset,
+    0 4px 24px rgba(0, 13, 64, 0.6);
+  position: relative;
+  overflow: hidden;
+}
+
+.govt-bar::before {
+  content: '';
+  position: absolute;
+  top: 0;
+  left: 0;
+  right: 0;
+  height: 1px;
+  background: linear-gradient(90deg, transparent, rgba(255, 255, 255, 0.2), transparent);
+}
+
+.govt-bar::after {
+  content: '';
+  position: absolute;
+  top: -50%;
+  left: -20%;
+  width: 40%;
+  height: 200%;
+  background: linear-gradient(105deg, transparent, rgba(255, 255, 255, 0.03), transparent);
+  animation: shimmer-bar 4s ease-in-out infinite;
+}
+
+@keyframes shimmer-bar {
+
+  0%,
+  100% {
+    transform: translateX(-100%);
+    opacity: 0;
+  }
+
+  50% {
+    transform: translateX(300%);
+    opacity: 1;
+  }
+}
+
+/* ── Glass Cards ────────────────────────────────────────────────────── */
+.glass-card {
+  background: rgba(255, 255, 255, 0.85);
+  backdrop-filter: blur(16px) saturate(180%);
+  -webkit-backdrop-filter: blur(16px) saturate(180%);
+  border: 1px solid rgba(255, 255, 255, 0.6);
+  box-shadow:
+    0 4px 24px rgba(0, 26, 102, 0.08),
+    0 1px 0 rgba(255, 255, 255, 0.9) inset;
+  transition: transform 0.2s var(--transition-smooth),
+    box-shadow 0.2s var(--transition-smooth);
+}
+
+.glass-card:hover {
+  transform: translateY(-2px);
+  box-shadow:
+    0 12px 40px rgba(0, 26, 102, 0.14),
+    0 1px 0 rgba(255, 255, 255, 0.9) inset;
+}
+
+/* ── Premium Buttons ────────────────────────────────────────────────── */
+.btn-primary {
+  @apply inline-flex items-center gap-2 px-5 py-2.5 text-sm font-semibold text-white rounded-xl;
+  background: linear-gradient(135deg, #0033aa, #0044cc);
+  box-shadow: 0 4px 14px rgba(0, 51, 170, 0.35), 0 1px 0 rgba(255, 255, 255, 0.15) inset;
+  transition: all 0.2s var(--transition-smooth);
+}
+
+.btn-primary:hover:not(:disabled) {
+  transform: translateY(-1px);
+  box-shadow: 0 8px 24px rgba(0, 51, 170, 0.45), 0 1px 0 rgba(255, 255, 255, 0.15) inset;
+}
+
+.btn-primary:active:not(:disabled) {
+  transform: translateY(0);
+  box-shadow: 0 2px 8px rgba(0, 51, 170, 0.3);
+}
+
+.btn-primary:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+.btn-secondary {
+  @apply inline-flex items-center gap-2 px-5 py-2.5 text-sm font-medium rounded-xl;
+  @apply bg-white text-gray-700 border border-gray-200;
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.06);
+  transition: all 0.2s var(--transition-smooth);
+}
+
+.btn-secondary:hover {
+  @apply border-brand-300 text-brand-700 bg-brand-50;
+  box-shadow: 0 4px 14px rgba(0, 51, 170, 0.12);
+  transform: translateY(-1px);
+}
+
+/* ── Status Badge ─────────────────────────────────────────────────── */
+.badge {
+  @apply inline-flex items-center gap-1 px-2.5 py-0.5 rounded-full text-xs font-medium;
+}
+
+.badge-blue {
+  @apply bg-blue-50 text-blue-700 ring-1 ring-blue-200/50;
+}
+
+.badge-green {
+  @apply bg-emerald-50 text-emerald-700 ring-1 ring-emerald-200/50;
+}
+
+.badge-amber {
+  @apply bg-amber-50 text-amber-700 ring-1 ring-amber-200/50;
+}
+
+.badge-red {
+  @apply bg-red-50 text-red-700 ring-1 ring-red-200/50;
+}
+
+/* ── Data Table ─────────────────────────────────────────────────────── */
+.data-table {
+  @apply w-full;
+  border-collapse: separate;
+  border-spacing: 0;
+}
+
+.data-table th {
+  @apply text-xs font-semibold text-gray-500 uppercase tracking-wider px-4 py-3;
+  @apply bg-gray-50/80 border-b border-gray-200;
+  letter-spacing: 0.06em;
+}
+
+.data-table td {
+  @apply px-4 py-3.5 text-sm border-b border-gray-100;
+  transition: background-color 0.15s ease;
+}
+
+.data-table tr:hover td {
+  @apply bg-brand-50/40;
+}
+
+.data-table tr:last-child td {
+  border-bottom: none;
+}
+
+/* ── Form Elements ─────────────────────────────────────────────────── */
+.form-input {
+  @apply w-full px-4 py-2.5 text-sm rounded-xl border border-gray-200 bg-white;
+  @apply placeholder:text-gray-400 text-gray-900;
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.06);
+  transition: all 0.2s var(--transition-smooth);
+}
+
+.form-input:focus {
+  @apply outline-none border-brand-500;
+  box-shadow: 0 0 0 3px rgba(0, 51, 170, 0.1), 0 1px 3px rgba(0, 0, 0, 0.06);
+}
+
+.form-label {
+  @apply block text-xs font-semibold text-gray-600 mb-1.5 uppercase tracking-wider;
+}
+
+/* ── Sidebar ────────────────────────────────────────────────────────── */
+.sidebar-item {
+  @apply flex items-center gap-2.5 px-3 py-2 rounded-lg text-sm font-medium;
+  @apply text-gray-600 hover:text-brand-700 hover:bg-brand-50;
+  transition: all 0.15s ease;
+}
+
+.sidebar-item.active {
+  @apply text-brand-700 bg-brand-50;
+  box-shadow: 2px 0 0 #0033aa inset;
+}
+
+/* ── Matter Cards ───────────────────────────────────────────────────── */
+.matter-card {
+  @apply rounded-2xl p-5 border border-gray-200 bg-white cursor-pointer;
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.04);
+  transition: all 0.2s var(--transition-smooth);
+}
+
+.matter-card:hover {
+  @apply border-brand-200;
+  box-shadow: 0 8px 24px rgba(0, 51, 170, 0.1);
+  transform: translateY(-2px);
+}
+
+/* ── TipTap Document Editor ─────────────────────────────────────────── */
 .tiptap {
-  @apply outline-none min-h-[400px] px-10 py-8;
+  @apply outline-none min-h-[520px];
   font-family: 'Times New Roman', 'Georgia', serif;
   font-size: 14pt;
-  line-height: 1.5;
+  line-height: 1.6;
+  padding: 48px 64px;
+  max-width: 900px;
+  margin: 0 auto;
 }
 
 .tiptap h1 {
-  @apply text-xl font-bold mb-3 mt-5;
+  @apply font-bold mb-3 mt-0;
   font-family: 'Times New Roman', 'Georgia', serif;
   font-size: 16pt;
+  text-align: center;
+  letter-spacing: 0.08em;
 }
 
 .tiptap h2 {
-  @apply text-lg font-bold mb-2 mt-4;
+  @apply font-bold mb-2 mt-5;
   font-family: 'Times New Roman', 'Georgia', serif;
   font-size: 14pt;
 }
 
 .tiptap h3 {
-  @apply text-base font-semibold mb-2 mt-3;
+  @apply font-semibold mb-2 mt-4;
   font-family: 'Times New Roman', 'Georgia', serif;
   font-size: 14pt;
 }
 
 .tiptap p {
-  @apply mb-1 leading-relaxed;
-  text-indent: 0;
+  @apply mb-2;
+  text-align: justify;
+}
+
+.tiptap p.text-right {
+  text-align: right;
+}
+
+.tiptap p.text-center {
+  text-align: center;
+}
+
+.tiptap p.text-left {
+  text-align: left;
 }
 
 .tiptap ul {
-  @apply list-disc ml-6 mb-2;
+  @apply list-disc ml-8 mb-3;
 }
 
 .tiptap ol {
-  @apply list-decimal ml-6 mb-2;
+  @apply list-decimal ml-8 mb-3;
 }
 
 .tiptap li {
-  @apply mb-1;
+  @apply mb-1.5;
 }
 
 .tiptap li p {
@@ -58,11 +304,15 @@
 }
 
 .tiptap blockquote {
-  @apply border-l-4 border-brand-300 pl-4 italic my-3 text-gray-600;
+  @apply border-l-4 border-brand-300 pl-5 italic my-4 text-gray-600;
 }
 
 .tiptap a {
   @apply text-brand-600 underline;
+}
+
+.tiptap strong {
+  @apply font-bold;
 }
 
 .tiptap p.is-editor-empty:first-child::before {
@@ -70,24 +320,320 @@
   content: attr(data-placeholder);
 }
 
-/* Custom scrollbar */
+/* Document paper effect */
+.document-paper {
+  background: white;
+  box-shadow:
+    0 0 0 1px rgba(0, 0, 0, 0.04),
+    0 4px 24px rgba(0, 0, 0, 0.08),
+    0 16px 48px rgba(0, 0, 0, 0.04);
+  border-radius: 2px;
+}
+
+/* ── Chat Messages ──────────────────────────────────────────────────── */
+.chat-bubble-user {
+  background: linear-gradient(135deg, #0033aa, #0044cc);
+  box-shadow: 0 4px 14px rgba(0, 51, 170, 0.3);
+  @apply text-white rounded-2xl rounded-tr-sm px-5 py-3.5 max-w-[78%];
+}
+
+.chat-bubble-ai {
+  @apply bg-white border border-gray-200 text-gray-800 rounded-2xl rounded-tl-sm px-5 py-3.5 max-w-[78%];
+  box-shadow: 0 2px 12px rgba(0, 0, 0, 0.06);
+}
+
+/* ── Animations ─────────────────────────────────────────────────────── */
+@keyframes fadeInUp {
+  from {
+    opacity: 0;
+    transform: translateY(16px);
+  }
+
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+@keyframes fadeIn {
+  from {
+    opacity: 0;
+  }
+
+  to {
+    opacity: 1;
+  }
+}
+
+@keyframes slideInRight {
+  from {
+    opacity: 0;
+    transform: translateX(20px);
+  }
+
+  to {
+    opacity: 1;
+    transform: translateX(0);
+  }
+}
+
+@keyframes pulse-ring {
+  0% {
+    transform: scale(0.95);
+    box-shadow: 0 0 0 0 rgba(0, 51, 170, 0.4);
+  }
+
+  70% {
+    transform: scale(1);
+    box-shadow: 0 0 0 12px rgba(0, 51, 170, 0);
+  }
+
+  100% {
+    transform: scale(0.95);
+    box-shadow: 0 0 0 0 rgba(0, 51, 170, 0);
+  }
+}
+
+@keyframes shimmer {
+  0% {
+    transform: translateX(-100%);
+  }
+
+  100% {
+    transform: translateX(200%);
+  }
+}
+
+@keyframes float {
+
+  0%,
+  100% {
+    transform: translateY(0px);
+  }
+
+  50% {
+    transform: translateY(-6px);
+  }
+}
+
+@keyframes spin-slow {
+  from {
+    transform: rotate(0deg);
+  }
+
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+/* ── Utility Animation Classes ──────────────────────────────────────── */
+.animate-fade-in-up {
+  animation: fadeInUp 0.4s var(--transition-smooth) both;
+}
+
+.animate-fade-in {
+  animation: fadeIn 0.3s ease both;
+}
+
+.animate-slide-in-right {
+  animation: slideInRight 0.3s var(--transition-smooth) both;
+}
+
+.animate-float {
+  animation: float 3s ease-in-out infinite;
+}
+
+.animate-spin-slow {
+  animation: spin-slow 3s linear infinite;
+}
+
+/* Stagger delays */
+.stagger-1 {
+  animation-delay: 0.05s;
+}
+
+.stagger-2 {
+  animation-delay: 0.10s;
+}
+
+.stagger-3 {
+  animation-delay: 0.15s;
+}
+
+.stagger-4 {
+  animation-delay: 0.20s;
+}
+
+.stagger-5 {
+  animation-delay: 0.25s;
+}
+
+/* ── Skeleton Loading ────────────────────────────────────────────────── */
+.skeleton {
+  @apply bg-gray-200 rounded-lg;
+  background: linear-gradient(90deg, #f0f0f0 25%, #e0e0e0 50%, #f0f0f0 75%);
+  background-size: 200% 100%;
+  animation: skeleton-shimmer 1.5s ease-in-out infinite;
+}
+
+@keyframes skeleton-shimmer {
+  0% {
+    background-position: 200% 0;
+  }
+
+  100% {
+    background-position: -200% 0;
+  }
+}
+
+/* ── Custom Scrollbar ────────────────────────────────────────────────── */
 ::-webkit-scrollbar {
-  width: 6px;
+  width: 5px;
+  height: 5px;
 }
 
 ::-webkit-scrollbar-track {
-  @apply bg-transparent;
+  background: transparent;
 }
 
 ::-webkit-scrollbar-thumb {
   @apply bg-gray-300 rounded-full;
+  transition: background 0.2s;
 }
 
 ::-webkit-scrollbar-thumb:hover {
   @apply bg-gray-400;
 }
 
-/* Govt-style top bar gradient */
-.govt-bar {
-  background: linear-gradient(135deg, #001a66 0%, #0033aa 50%, #004aad 100%);
+/* ── Alert Banners ───────────────────────────────────────────────────── */
+.alert-success {
+  @apply flex items-start gap-3 px-4 py-3 rounded-xl text-sm;
+  @apply bg-emerald-50 border border-emerald-200 text-emerald-800;
+}
+
+.alert-warning {
+  @apply flex items-start gap-3 px-4 py-3 rounded-xl text-sm;
+  @apply bg-amber-50 border border-amber-200 text-amber-800;
+}
+
+.alert-error {
+  @apply flex items-start gap-3 px-4 py-3 rounded-xl text-sm;
+  @apply bg-red-50 border border-red-200 text-red-800;
+}
+
+.alert-info {
+  @apply flex items-start gap-3 px-4 py-3 rounded-xl text-sm;
+  @apply bg-blue-50 border border-blue-200 text-blue-800;
+}
+
+/* ── Page Transitions ────────────────────────────────────────────────── */
+.page-enter {
+  animation: fadeInUp 0.35s var(--transition-smooth) both;
+}
+
+/* ── Shimmer effect for generating state ─────────────────────────────── */
+.generating-shimmer {
+  position: relative;
+  overflow: hidden;
+}
+
+.generating-shimmer::after {
+  content: '';
+  position: absolute;
+  top: 0;
+  left: 0;
+  width: 40%;
+  height: 100%;
+  background: linear-gradient(90deg, transparent, rgba(255, 255, 255, 0.4), transparent);
+  animation: shimmer 2s linear infinite;
+}
+
+/* ── Legislation search result cards ─────────────────────────────────── */
+.law-card {
+  @apply border border-gray-200 rounded-xl p-4 bg-white;
+  transition: all 0.2s var(--transition-smooth);
+}
+
+.law-card:hover {
+  @apply border-brand-200 shadow-sm;
+  background: linear-gradient(135deg, #f8faff, white);
+}
+
+.law-card.selected {
+  @apply border-brand-400 bg-brand-50;
+  box-shadow: 0 0 0 3px rgba(0, 51, 170, 0.08);
+}
+
+/* ── AI Thinking dots ────────────────────────────────────────────────── */
+.thinking-dots span {
+  display: inline-block;
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  @apply bg-brand-400;
+  animation: thinking-bounce 1.2s ease-in-out infinite;
+}
+
+.thinking-dots span:nth-child(2) {
+  animation-delay: 0.2s;
+}
+
+.thinking-dots span:nth-child(3) {
+  animation-delay: 0.4s;
+}
+
+@keyframes thinking-bounce {
+
+  0%,
+  60%,
+  100% {
+    transform: translateY(0);
+    opacity: 0.4;
+  }
+
+  30% {
+    transform: translateY(-8px);
+    opacity: 1;
+  }
+}
+
+/* ── Stepper ─────────────────────────────────────────────────────────── */
+.step-indicator {
+  @apply flex items-center justify-center w-7 h-7 rounded-full text-xs font-bold;
+  transition: all 0.3s var(--transition-smooth);
+}
+
+.step-indicator.active {
+  background: linear-gradient(135deg, #0033aa, #0044cc);
+  @apply text-white;
+  box-shadow: 0 4px 12px rgba(0, 51, 170, 0.4);
+}
+
+.step-indicator.done {
+  @apply bg-emerald-500 text-white;
+}
+
+.step-indicator.pending {
+  @apply bg-gray-200 text-gray-500;
+}
+
+/* ── Print styles ────────────────────────────────────────────────────── */
+@media print {
+
+  .govt-bar,
+  nav,
+  .sidebar,
+  button,
+  .no-print {
+    display: none !important;
+  }
+
+  .tiptap {
+    padding: 0;
+    font-size: 12pt;
+  }
+
+  body {
+    background: white;
+  }
 }

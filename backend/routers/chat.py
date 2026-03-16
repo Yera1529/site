@@ -1,9 +1,10 @@
 """Chat routes with SSE streaming, RAG-augmented generation and DOCX export."""
 
+import logging
 import uuid
 import json
 from typing import List, Optional
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 from fastapi import APIRouter, Depends, HTTPException
 from fastapi.responses import StreamingResponse, FileResponse
 from sqlalchemy import select
@@ -20,6 +21,8 @@ from schemas.chat import (
     GenerateDocumentRequest,
     GenerateDocumentResponse,
     ValidationReport,
+    CitationCheckResponse,
+    RetrievedLawResponse,
 )
 from schemas.legislation import SearchLawsRequest, RetrievedLaw
 from routers.auth import get_current_user
@@ -29,12 +32,14 @@ from services.rag import RAGService
 from services.document import DocumentService
 from models.template import DocumentTemplate
 
+logger = logging.getLogger(__name__)
+
 router = APIRouter(prefix="/api", tags=["chat"])
 
 
-class CitationCheck(BaseModel):
-    cited: List[str]
-    unverified: List[str]
+class ExportDocxRequest(BaseModel):
+    html: str = Field(..., min_length=1)
+    filename: str = Field(default="document.docx", max_length=255)
 
 
 @router.get("/matters/{matter_id}/chat", response_model=List[ChatMessageResponse])
@@ -67,7 +72,7 @@ async def chat(
         content=data.message,
     )
     db.add(user_msg)
-    await db.commit()
+    await db.flush()
 
     rag = RAGService()
     combined = rag.query_combined(
@@ -174,15 +179,18 @@ async def generate_document(
     files = result.scalars().all()
     all_text = "\n\n".join(f.extracted_text for f in files if f.extracted_text)
 
+    logger.info(
+        "generate_document: matter=%s template=%s files=%d text_len=%d",
+        data.matter_id, data.template_name, len(files), len(all_text)
+    )
+
     tmpl_result = await db.execute(
         select(DocumentTemplate).where(DocumentTemplate.name == data.template_name)
-    )
-    tmpl = tmpl_result.scalar_one_or_none()
+    ) if data.template_name else None
+    tmpl = tmpl_result.scalar_one_or_none() if tmpl_result else None
     template_content = tmpl.extracted_text if tmpl else None
-    if not template_content:
-        raise HTTPException(
-            status_code=404, detail=f"Шаблон «{data.template_name}» не найден"
-        )
+    # template_content не используется в промпте — правила заданы в REPRESENTATION_RULES
+    # шаблон нужен только для template_id в записи Representation
 
     rag = RAGService()
 
@@ -195,31 +203,55 @@ async def generate_document(
 
     # Use user-selected laws if provided; otherwise search automatically
     if data.selected_laws and len(data.selected_laws) > 0:
-        retrieved_laws = [law.model_dump() for law in data.selected_laws]
+        retrieved_laws = [law.model_dump() for law in data.selected_laws]  # -> list[dict]
     else:
         law_query = all_text[:4000]
         if matter.description:
             law_query = f"{matter.description[:1000]} {law_query}"
         retrieved_laws = rag.search_relevant_laws(law_query, top_k=10)
 
+    # Build a structured case context block so AI clearly sees what data is available
+    case_context_parts = []
+    if matter.name:
+        case_context_parts.append(f"ЕРДР / Номер дела: {matter.name}")
+    if matter.description:
+        case_context_parts.append(f"Фабула дела: {matter.description}")
+    if matter.custom_instructions:
+        case_context_parts.append(f"Инструкции следователя: {matter.custom_instructions}")
+    if all_text:
+        # Pass generous portion of case file text so AI can extract FIO, dates, etc.
+        case_context_parts.append(
+            f"Полный текст материалов дела (используй для извлечения ФИО, дат, обстоятельств):\n"
+            f"{all_text[:20000]}"
+        )
+    case_context_str = "\n\n".join(case_context_parts)
+
+    # Combine user additional instructions with explicit case data reminder
+    enriched_instructions = (
+        (data.additional_instructions or "") + "\n\n"
+        "ВАЖНО: Используй ТОЛЬКО реальные данные из раздела '## Факты из материалов дела'. "
+        "Никаких заглушек (___, ???, [заполнить]). "
+        "Если данные есть в тексте — обязательно вставь их в документ."
+    ).strip()
+
     try:
         ai = AIService()
         generated = await ai.generate_document(
-            template=template_content,
-            facts=all_text,
+            facts=case_context_str,
             custom_instructions=matter.custom_instructions or "",
-            additional_instructions=data.additional_instructions or "",
+            additional_instructions=enriched_instructions,
             kb_context=kb_context,
             retrieved_laws=retrieved_laws,
         )
+        logger.info("generate_document: generated %d chars", len(generated))
     except Exception as e:
         error_msg = str(e)
         if "connect" in error_msg.lower() or "timeout" in error_msg.lower():
             raise HTTPException(
                 status_code=502,
                 detail=(
-                    "Не удалось подключиться к ИИ-серверу. "
-                    "Проверьте, что Ollama запущен и модель загружена. "
+                    "Не удалось подключиться к Gemini API. "
+                    "Проверьте API-ключ и соединение с интернетом. "
                     f"Детали: {error_msg[:200]}"
                 ),
             )
@@ -246,7 +278,6 @@ async def generate_document(
 
         try:
             generated = await ai.generate_document(
-                template=template_content,
                 facts=all_text,
                 custom_instructions=matter.custom_instructions or "",
                 additional_instructions=data.additional_instructions or "",
@@ -260,10 +291,15 @@ async def generate_document(
             citation_check = validate_law_citations(generated, retrieved_laws)
 
     # Auto-save as Representation record
+    rep_title = (
+        f"Представление — {data.template_name}"
+        if data.template_name
+        else f"Представление — {matter.name}"
+    )
     rep = Representation(
         matter_id=data.matter_id,
         template_id=tmpl.id if tmpl else None,
-        title=f"Представление — {data.template_name}",
+        title=rep_title,
         content=generated,
         status="draft",
         selected_law_ids=json.dumps([
@@ -274,6 +310,8 @@ async def generate_document(
         created_by=user.id,
     )
     db.add(rep)
+    await db.flush()
+    await db.refresh(rep)
 
     assistant_msg = ChatMessage(
         matter_id=data.matter_id,
@@ -286,25 +324,26 @@ async def generate_document(
     return GenerateDocumentResponse(
         content=generated,
         template_name=data.template_name,
+        representation_id=rep.id,
         validation=ValidationReport(**validation),
-        retrieved_laws=[RetrievedLaw(**law) for law in retrieved_laws],
-        citation_check=CitationCheck(**citation_check),
+        retrieved_laws=[
+            RetrievedLawResponse(**law) if isinstance(law, dict) else RetrievedLawResponse(**law.model_dump())
+            for law in retrieved_laws
+        ],
+        citation_check=CitationCheckResponse(**citation_check),
     )
 
 
 @router.post("/export-docx")
 async def export_docx(
-    content: dict,
+    data: ExportDocxRequest,
     user: User = Depends(get_current_user),
 ):
-    html_content = content.get("html", "")
-    filename = content.get("filename", "document.docx")
-
     doc_service = DocumentService()
-    file_path = doc_service.html_to_docx(html_content, filename)
+    file_path = doc_service.html_to_docx(data.html, data.filename)
 
     return FileResponse(
         path=file_path,
-        filename=filename,
+        filename=data.filename,
         media_type="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
     )

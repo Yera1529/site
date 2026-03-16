@@ -1,79 +1,176 @@
-"""Retrieval-Augmented Generation service using ChromaDB with SentenceTransformer embeddings.
+"""World-class RAG system for legal document retrieval.
 
-Four collections:
-  - Per-matter: case files for each matter
-  - knowledge_base_art200: article-200 representation samples
-  - legislation: uploaded laws with article-level metadata
-  - legislation_summaries: per-chunk summaries for improved global context
-
-Two-stage retrieval for legislation:
-  1. Fast bi-encoder (SentenceTransformer) fetches top-20 candidates
-  2. Cross-encoder reranker (if available) rescores and returns top-N
+Architecture:
+  - Hierarchical legislation parsing: Law → Article → Point
+  - Parent-document retrieval: index points, return full articles
+  - Hybrid search: semantic (bi-encoder) + lexical (BM25) + Reciprocal Rank Fusion
+  - Cross-encoder reranking for final precision
+  - Proper E5 query/passage prefixing
+  - Three collections: per-matter, knowledge-base, legislation
 """
 
 import re
 import logging
+import os
+import pickle
 import chromadb
 from chromadb.config import Settings as ChromaSettings
 from sentence_transformers import SentenceTransformer, CrossEncoder
+from rank_bm25 import BM25Okapi
 from config import get_settings
 
 logger = logging.getLogger(__name__)
 
 CHUNK_SIZE = 512
-CHUNK_OVERLAP = 128
-LEG_CHUNK_SIZE = 800
-LEG_CHUNK_OVERLAP = 160
+CHUNK_OVERLAP = 100
 KB_COLLECTION = "knowledge_base_art200"
-LEGISLATION_COLLECTION = "legislation"
+LEGISLATION_COLLECTION = "legislation_v2"
 
 LEGAL_SYNONYMS = {
-    "убийство": "причинение смерти, насильственная смерть, лишение жизни, умышленное причинение смерти",
-    "кража": "хищение, тайное хищение чужого имущества, тайное завладение",
-    "мошенничество": "обман, злоупотребление доверием, завладение путём обмана",
-    "хулиганство": "грубое нарушение общественного порядка, дерзость, хулиганские побуждения",
-    "наркотик": "наркотическое средство, психотропное вещество, запрещённое вещество, оборот наркотиков",
-    "алкоголь": "спиртные напитки, опьянение, употребление алкоголя, нетрезвое состояние, алкогольное опьянение",
-    "нож": "холодное оружие, колюще-режущее, орудие преступления, клинковое оружие",
-    "оружие": "огнестрельное оружие, боеприпасы, вооружение, незаконное хранение",
-    "побои": "причинение вреда здоровью, телесные повреждения, избиение",
-    "пожар": "возгорание, противопожарная безопасность, огонь, пожарная безопасность",
-    "дтп": "дорожно-транспортное происшествие, авария, наезд, нарушение ПДД",
-    "несовершеннолетн": "малолетний, ребёнок, подросток, лицо не достигшее 18 лет",
-    "должностн": "государственный служащий, чиновник, служебное положение, должностное лицо",
-    "взятк": "коррупция, получение взятки, дача взятки, подкуп, коррупционное",
-    "превышени": "превышение должностных полномочий, злоупотребление властью",
-    "халатност": "ненадлежащее исполнение обязанностей, бездействие, неисполнение",
-    "безопасност": "охрана труда, техника безопасности, промышленная безопасность, правила безопасности",
-    "торговл": "продажа, реализация, сбыт, незаконная торговля",
-    "надзор": "контроль, проверка, инспекция, государственный надзор",
-    "лицензи": "разрешение, лицензирование, разрешительный документ",
+    "убийство": "причинение смерти лишение жизни умышленное причинение смерти",
+    "кража": "хищение тайное хищение чужого имущества тайное завладение",
+    "мошенничество": "обман злоупотребление доверием завладение путём обмана",
+    "хулиганство": "грубое нарушение общественного порядка хулиганские побуждения",
+    "наркотик": "наркотическое средство психотропное вещество оборот наркотиков",
+    "алкоголь": "спиртные напитки опьянение нетрезвое состояние",
+    "нож": "холодное оружие колюще-режущее орудие преступления",
+    "оружие": "огнестрельное оружие боеприпасы незаконное хранение",
+    "побои": "причинение вреда здоровью телесные повреждения",
+    "пожар": "возгорание противопожарная безопасность пожарная безопасность",
+    "дтп": "дорожно-транспортное происшествие авария наезд нарушение ПДД",
+    "несовершеннолетн": "малолетний ребёнок подросток",
+    "должностн": "государственный служащий служебное положение",
+    "взятк": "коррупция получение взятки дача взятки подкуп",
+    "халатност": "ненадлежащее исполнение обязанностей бездействие",
+    "безопасност": "охрана труда техника безопасности",
+    "надзор": "контроль проверка инспекция государственный надзор",
 }
 
 
+# ═══════════════════════════════════════════════════════════════════════
+# Embedding adapter with E5 prefix support
+# ═══════════════════════════════════════════════════════════════════════
+
 class _EmbeddingAdapter:
-    """Wraps SentenceTransformer for ChromaDB's EmbeddingFunction protocol.
-
-    For E5-family models, documents are prefixed with 'passage: ' automatically.
-    Use encode_queries() for query-time encoding with 'query: ' prefix.
-    """
-
     def __init__(self, model_name: str):
-        self.model = SentenceTransformer(model_name)
+        self._model_name = model_name
+        self._model = None
         self._is_e5 = "e5" in model_name.lower()
 
+    def _get_model(self):
+        if self._model is None:
+            logger.info("Loading embedding model: %s (this may take a while on first run)...", self._model_name)
+            self._model = SentenceTransformer(self._model_name)
+            logger.info("Embedding model loaded successfully.")
+        return self._model
+
     def __call__(self, input: list[str]) -> list[list[float]]:
-        """Encode documents (used by ChromaDB during add/upsert)."""
-        if self._is_e5:
-            input = [f"passage: {t}" for t in input]
-        return self.model.encode(input, show_progress_bar=False).tolist()
+        texts = [f"passage: {t}" for t in input] if self._is_e5 else input
+        return self._get_model().encode(texts, show_progress_bar=False, normalize_embeddings=True).tolist()
 
     def encode_queries(self, queries: list[str]) -> list[list[float]]:
-        """Encode queries with proper prefix for E5 models."""
-        if self._is_e5:
-            queries = [f"query: {q}" for q in queries]
-        return self.model.encode(queries, show_progress_bar=False).tolist()
+        texts = [f"query: {q}" for q in queries] if self._is_e5 else queries
+        return self._get_model().encode(texts, show_progress_bar=False, normalize_embeddings=True).tolist()
 
+
+# ═══════════════════════════════════════════════════════════════════════
+# Legislation parser — hierarchical: Law → Article → Points
+# ═══════════════════════════════════════════════════════════════════════
+
+class LegislationParser:
+    """Parses Kazakh/Russian legislation into a structured hierarchy."""
+
+    ARTICLE_RE = re.compile(
+        r"(?:^|\n)\s*Статья\s+(\d+(?:[-–]\d+)?(?:\.\d+)?)\s*[\.\)]\s*([^\n]*)",
+        re.IGNORECASE,
+    )
+    POINT_RE = re.compile(r"^(\d+)\s*[\.\)]\s+", re.MULTILINE)
+
+    @classmethod
+    def parse(cls, text: str, law_title: str) -> list[dict]:
+        """Parse full legislation text into structured articles.
+
+        Returns list of:
+          {number, title, full_text, points: [{number, text}]}
+        """
+        text = cls._normalize(text)
+        splits = list(cls.ARTICLE_RE.finditer(text))
+
+        if not splits:
+            return []
+
+        articles = []
+        for idx, match in enumerate(splits):
+            art_num = match.group(1).strip()
+            art_title_raw = match.group(2).strip()
+            start = match.end()
+            end = splits[idx + 1].start() if idx + 1 < len(splits) else len(text)
+            body = text[start:end].strip()
+
+            art_title = cls._clean_title(art_title_raw, body)
+            points = cls._extract_points(body)
+
+            articles.append({
+                "number": art_num,
+                "title": art_title,
+                "full_text": f"Статья {art_num}. {art_title}\n{body}",
+                "points": points,
+                "law_title": law_title,
+            })
+
+        return articles
+
+    @classmethod
+    def _normalize(cls, text: str) -> str:
+        text = text.replace("\r\n", "\n").replace("\r", "\n")
+        text = re.sub(r"[ \t]+", " ", text)
+        text = re.sub(r"\n{3,}", "\n\n", text)
+        return text.strip()
+
+    @classmethod
+    def _clean_title(cls, raw_title: str, body: str) -> str:
+        t = raw_title.strip()
+        t = re.sub(r"^[,;:\.\)\s]+", "", t)
+        t = re.sub(r"[\(\[]+$", "", t).strip()
+        t = t.rstrip(".,;:")
+
+        if not t and body:
+            first_line = body.split("\n", 1)[0].strip()
+            first_line = re.sub(r"^\d+[\.\)]\s*", "", first_line)
+            t = first_line[:200]
+            t = re.sub(r"[\(\[]+$", "", t).strip()
+            t = t.rstrip(".,;:")
+
+        if t and t[0].islower():
+            t = t[0].upper() + t[1:]
+        return t[:300]
+
+    @classmethod
+    def _extract_points(cls, body: str) -> list[dict]:
+        """Extract numbered points (1. ..., 2. ...) from article body."""
+        point_matches = list(cls.POINT_RE.finditer(body))
+        if not point_matches:
+            return [{"number": "", "text": body.strip()}] if body.strip() else []
+
+        points = []
+        for idx, m in enumerate(point_matches):
+            pnum = m.group(1)
+            start = m.start()
+            end = point_matches[idx + 1].start() if idx + 1 < len(point_matches) else len(body)
+            ptext = body[start:end].strip()
+            if ptext:
+                points.append({"number": pnum, "text": ptext})
+
+        preamble = body[: point_matches[0].start()].strip()
+        if preamble and len(preamble.split()) > 10:
+            points.insert(0, {"number": "0", "text": preamble})
+
+        return points
+
+
+# ═══════════════════════════════════════════════════════════════════════
+# Main RAG Service
+# ═══════════════════════════════════════════════════════════════════════
 
 class RAGService:
     _client = None
@@ -90,18 +187,59 @@ class RAGService:
             )
         if RAGService._embed_fn is None:
             RAGService._embed_fn = _EmbeddingAdapter(settings.embedding_model)
-        if not RAGService._reranker_loaded:
-            RAGService._reranker_loaded = True
+
+        self._bm25_path = f"{settings.storage_dir}/bm25_v2.pkl"
+        self._bm25: dict = {"corpus": [], "meta": [], "model": None}
+        self._load_bm25()
+
+    @classmethod
+    def _ensure_reranker(cls):
+        """Lazy-load the cross-encoder reranker on first actual use."""
+        if not cls._reranker_loaded:
+            cls._reranker_loaded = True
             try:
-                RAGService._reranker = CrossEncoder(
-                    "BAAI/bge-reranker-v2-m3", max_length=512
-                )
+                logger.info("Loading cross-encoder reranker (first use)...")
+                cls._reranker = CrossEncoder("BAAI/bge-reranker-v2-m3", max_length=512)
                 logger.info("Cross-encoder reranker loaded: BAAI/bge-reranker-v2-m3")
             except Exception as e:
-                logger.warning("Cross-encoder reranker unavailable, skipping rerank stage: %s", e)
-                RAGService._reranker = None
+                logger.warning("Reranker unavailable: %s", e)
+                cls._reranker = None
 
-    # ── Per-matter collections ──────────────────────────────────────────
+    # ── BM25 persistence ───────────────────────────────────────────────
+
+    def _load_bm25(self):
+        if os.path.exists(self._bm25_path):
+            try:
+                with open(self._bm25_path, "rb") as f:
+                    self._bm25 = pickle.load(f)
+            except Exception:
+                self._rebuild_bm25()
+        else:
+            self._rebuild_bm25()
+
+    def _save_bm25(self):
+        os.makedirs(os.path.dirname(self._bm25_path) or ".", exist_ok=True)
+        try:
+            with open(self._bm25_path, "wb") as f:
+                pickle.dump(self._bm25, f)
+        except Exception as e:
+            logger.error("BM25 save failed: %s", e)
+
+    def _rebuild_bm25(self):
+        try:
+            # Use lightweight collection access - we only read documents, no embedding needed
+            col = self._client.get_or_create_collection(name=LEGISLATION_COLLECTION)
+            data = col.get(include=["documents", "metadatas"])
+            corpus = data.get("documents") or []
+            meta = data.get("metadatas") or []
+            tokenized = [d.lower().split() for d in corpus]
+            model = BM25Okapi(tokenized) if tokenized else None
+            self._bm25 = {"corpus": corpus, "meta": meta, "model": model}
+            self._save_bm25()
+        except Exception as e:
+            logger.error("BM25 rebuild failed: %s", e)
+
+    # ── Per-matter collections ─────────────────────────────────────────
 
     def _get_collection(self, matter_id: str):
         return self._client.get_or_create_collection(
@@ -111,39 +249,35 @@ class RAGService:
         )
 
     def index_document(self, matter_id: str, file_id: str, text: str) -> None:
-        collection = self._get_collection(matter_id)
-        chunks = self._chunk_text(text)
+        col = self._get_collection(matter_id)
+        chunks = self._sentence_chunk(text, max_words=400, overlap_words=80)
         if not chunks:
             return
-        ids = [f"{file_id}_chunk_{i}" for i in range(len(chunks))]
-        metadatas = [{"file_id": file_id, "chunk_index": i} for i in range(len(chunks))]
-        collection.add(documents=chunks, ids=ids, metadatas=metadatas)
+        ids = [f"{file_id}_c{i}" for i in range(len(chunks))]
+        metas = [{"file_id": file_id, "chunk_index": i} for i in range(len(chunks))]
+        col.upsert(documents=chunks, ids=ids, metadatas=metas)
 
     def query(self, matter_id: str, query_text: str, top_k: int = 5) -> list[str]:
         try:
-            collection = self._get_collection(matter_id)
-            if collection.count() == 0:
+            col = self._get_collection(matter_id)
+            if col.count() == 0:
                 return []
-            # Use query embeddings with proper E5 prefix
             q_emb = self._embed_fn.encode_queries([query_text])
-            results = collection.query(
-                query_embeddings=q_emb,
-                n_results=min(top_k, collection.count()),
-            )
-            return results["documents"][0] if results["documents"] else []
+            res = col.query(query_embeddings=q_emb, n_results=min(top_k, col.count()))
+            return res["documents"][0] if res["documents"] else []
         except Exception:
             return []
 
     def delete_document(self, matter_id: str, file_id: str) -> None:
         try:
-            collection = self._get_collection(matter_id)
-            existing = collection.get(where={"file_id": file_id})
+            col = self._get_collection(matter_id)
+            existing = col.get(where={"file_id": file_id})
             if existing["ids"]:
-                collection.delete(ids=existing["ids"])
+                col.delete(ids=existing["ids"])
         except Exception:
             pass
 
-    # ── Global knowledge base (article-200 representations) ────────────
+    # ── Knowledge base ─────────────────────────────────────────────────
 
     def _get_kb_collection(self):
         return self._client.get_or_create_collection(
@@ -153,62 +287,61 @@ class RAGService:
         )
 
     def index_kb_document(self, doc_id: str, text: str, metadata: dict | None = None) -> None:
-        collection = self._get_kb_collection()
-        chunks = self._chunk_text(text)
+        col = self._get_kb_collection()
+        chunks = self._sentence_chunk(text, max_words=400, overlap_words=80)
         if not chunks:
             return
         base_meta = {"doc_id": doc_id, "article": "200", "doc_type": "представление"}
         if metadata:
             base_meta.update(metadata)
-        ids = [f"kb_{doc_id}_chunk_{i}" for i in range(len(chunks))]
-        metadatas = [{**base_meta, "chunk_index": i} for i in range(len(chunks))]
-        collection.add(documents=chunks, ids=ids, metadatas=metadatas)
+        ids = [f"kb_{doc_id}_c{i}" for i in range(len(chunks))]
+        metas = [{**base_meta, "chunk_index": i} for i in range(len(chunks))]
+        col.upsert(documents=chunks, ids=ids, metadatas=metas)
 
     def query_kb(self, query_text: str, top_k: int = 5, article: str = "200") -> list[str]:
         try:
-            collection = self._get_kb_collection()
-            if collection.count() == 0:
+            col = self._get_kb_collection()
+            if col.count() == 0:
                 return []
             q_emb = self._embed_fn.encode_queries([query_text])
-            results = collection.query(
+            res = col.query(
                 query_embeddings=q_emb,
-                n_results=min(top_k, collection.count()),
+                n_results=min(top_k, col.count()),
                 where={"article": article},
             )
-            return results["documents"][0] if results["documents"] else []
+            return res["documents"][0] if res["documents"] else []
         except Exception:
             return []
 
     def delete_kb_document(self, doc_id: str) -> None:
         try:
-            collection = self._get_kb_collection()
-            existing = collection.get(where={"doc_id": doc_id})
+            col = self._get_kb_collection()
+            existing = col.get(where={"doc_id": doc_id})
             if existing["ids"]:
-                collection.delete(ids=existing["ids"])
+                col.delete(ids=existing["ids"])
         except Exception:
             pass
 
     def get_kb_stats(self) -> dict:
         try:
-            collection = self._get_kb_collection()
-            return {"total_chunks": collection.count()}
+            # Use lightweight collection access (no embedding fn needed for count)
+            col = self._client.get_or_create_collection(name=KB_COLLECTION)
+            return {"total_chunks": col.count()}
         except Exception:
             return {"total_chunks": 0}
 
     # ── Combined retrieval ─────────────────────────────────────────────
 
-    def query_combined(
-        self,
-        matter_id: str,
-        query_text: str,
-        top_k_matter: int = 3,
-        top_k_kb: int = 5,
-    ) -> dict[str, list[str]]:
-        matter_chunks = self.query(matter_id, query_text, top_k=top_k_matter)
-        kb_chunks = self.query_kb(query_text, top_k=top_k_kb)
-        return {"matter": matter_chunks, "knowledge_base": kb_chunks}
+    def query_combined(self, matter_id: str, query_text: str,
+                       top_k_matter: int = 3, top_k_kb: int = 5) -> dict:
+        return {
+            "matter": self.query(matter_id, query_text, top_k=top_k_matter),
+            "knowledge_base": self.query_kb(query_text, top_k=top_k_kb),
+        }
 
-    # ── Legislation collection ─────────────────────────────────────────
+    # ═══════════════════════════════════════════════════════════════════
+    # LEGISLATION — hierarchical indexing + hybrid retrieval
+    # ═══════════════════════════════════════════════════════════════════
 
     def _get_legislation_collection(self):
         return self._client.get_or_create_collection(
@@ -217,279 +350,367 @@ class RAGService:
             embedding_function=self._embed_fn,
         )
 
-    def index_legislation(
-        self, doc_id: str, text: str, law_title: str, category: str
-    ) -> int:
-        """Index a legislation document with summary-augmented chunks."""
-        collection = self._get_legislation_collection()
-        articles = self._chunk_legislation(text, law_title)
+    def index_legislation(self, doc_id: str, text: str, law_title: str, category: str) -> int:
+        """Index legislation with hierarchical article→point chunking.
+
+        Strategy:
+          - Parse into articles using LegislationParser
+          - Each article point becomes a chunk (never cut mid-sentence)
+          - Metadata includes article number, point number, full article title
+          - Each chunk is prefixed with context: "Закон: X, Статья N. Заголовок"
+          - Full article text stored in metadata for parent-document retrieval
+        """
+        col = self._get_legislation_collection()
+        articles = LegislationParser.parse(text, law_title)
 
         if not articles:
-            chunks = self._chunk_text_large(text)
-            articles = [
-                {"text": c, "article_number": "", "law_title": law_title}
-                for c in chunks
-            ]
+            chunks = self._sentence_chunk(text, max_words=600, overlap_words=120)
+            if not chunks:
+                return 0
+            ids = [f"leg_{doc_id}_f{i}" for i in range(len(chunks))]
+            docs = [f"[{law_title}]\n{c}" for c in chunks]
+            metas = [{
+                "doc_id": doc_id, "law_title": law_title, "article_number": "",
+                "point_number": "", "article_title": "", "category": category,
+                "full_article": "", "chunk_type": "fallback",
+            } for _ in chunks]
+            col.upsert(documents=docs, ids=ids, metadatas=metas)
+            self._rebuild_bm25()
+            return len(chunks)
 
-        if not articles:
+        ids, docs, metas = [], [], []
+        chunk_idx = 0
+
+        for art in articles:
+            art_num = art["number"]
+            art_title = art["title"]
+            full_art = art["full_text"]
+            context_prefix = f"[{law_title}, Статья {art_num}. {art_title}]"
+
+            if not art["points"] or (len(art["points"]) == 1 and not art["points"][0]["number"]):
+                chunk_text = f"{context_prefix}\n{full_art}"
+                ids.append(f"leg_{doc_id}_a{art_num}_{chunk_idx}")
+                docs.append(chunk_text)
+                metas.append({
+                    "doc_id": doc_id, "law_title": law_title,
+                    "article_number": art_num, "point_number": "",
+                    "article_title": art_title[:300], "category": category,
+                    "full_article": full_art[:8000], "chunk_type": "full_article",
+                })
+                chunk_idx += 1
+                continue
+
+            for pt in art["points"]:
+                pt_num = pt["number"]
+                pt_text = pt["text"]
+
+                if len(pt_text.split()) > 800:
+                    sub_chunks = self._sentence_chunk(pt_text, max_words=500, overlap_words=100)
+                    for sc in sub_chunks:
+                        chunk_text = f"{context_prefix}\n{sc}"
+                        ids.append(f"leg_{doc_id}_a{art_num}_p{pt_num}_{chunk_idx}")
+                        docs.append(chunk_text)
+                        metas.append({
+                            "doc_id": doc_id, "law_title": law_title,
+                            "article_number": art_num, "point_number": pt_num,
+                            "article_title": art_title[:300], "category": category,
+                            "full_article": full_art[:8000], "chunk_type": "point_sub",
+                        })
+                        chunk_idx += 1
+                else:
+                    chunk_text = f"{context_prefix}\n{pt_text}"
+                    ids.append(f"leg_{doc_id}_a{art_num}_p{pt_num}_{chunk_idx}")
+                    docs.append(chunk_text)
+                    metas.append({
+                        "doc_id": doc_id, "law_title": law_title,
+                        "article_number": art_num, "point_number": pt_num,
+                        "article_title": art_title[:300], "category": category,
+                        "full_article": full_art[:8000], "chunk_type": "point",
+                    })
+                    chunk_idx += 1
+
+        if not ids:
             return 0
 
-        ids = []
-        documents = []
-        metadatas = []
+        BATCH = 500
+        for i in range(0, len(ids), BATCH):
+            col.upsert(
+                documents=docs[i:i + BATCH],
+                ids=ids[i:i + BATCH],
+                metadatas=metas[i:i + BATCH],
+            )
 
-        for i, a in enumerate(articles):
-            chunk_text = a["text"]
-            art_num = a.get("article_number", "")
+        self._rebuild_bm25()
+        logger.info("Indexed %s: %d chunks from %d articles", law_title, len(ids), len(articles))
+        return len(ids)
 
-            summary = self._generate_chunk_summary(chunk_text, law_title, art_num)
+    def search_relevant_laws(self, query: str, top_k: int = 10,
+                             categories: list[str] | None = None) -> list[dict]:
+        """Hybrid retrieval: semantic + BM25 + RRF + cross-encoder rerank.
 
-            doc_with_summary = chunk_text
-            if summary:
-                doc_with_summary = f"[Краткое содержание: {summary}]\n\n{chunk_text}"
-
-            ids.append(f"leg_{doc_id}_chunk_{i}")
-            documents.append(doc_with_summary)
-            metadatas.append({
-                "doc_id": doc_id,
-                "law_title": a.get("law_title", law_title),
-                "article_number": art_num,
-                "category": category,
-                "chunk_type": "article" if art_num else "text",
-                "summary": summary,
-            })
-
-        collection.add(documents=documents, ids=ids, metadatas=metadatas)
-        return len(articles)
-
-    @staticmethod
-    def _generate_chunk_summary(text: str, law_title: str, article_number: str) -> str:
-        """Generate a brief extractive summary for a legislation chunk.
-
-        Uses the first meaningful sentence plus article reference rather than
-        calling an LLM, to keep indexing fast and dependency-free.
-        """
-        clean = re.sub(r"\s+", " ", text).strip()
-        sentences = re.split(r"(?<=[.!?])\s+", clean)
-        meaningful = [s for s in sentences if len(s.split()) > 5]
-
-        if not meaningful:
-            prefix = f"{law_title}, Статья {article_number}" if article_number else law_title
-            return f"{prefix}: {clean[:150]}"
-
-        first = meaningful[0][:200]
-        prefix = f"ст.{article_number} {law_title}" if article_number else law_title
-        return f"{prefix} — {first}"
-
-    def search_relevant_laws(
-        self, query: str, top_k: int = 10, categories: list[str] | None = None
-    ) -> list[dict]:
-        """Two-stage retrieval: bi-encoder fetch → cross-encoder rerank.
-
-        Stage 1: Fetch top-20 candidates using the bi-encoder (via ChromaDB).
-                 Runs both original and synonym-expanded queries.
-        Stage 2: Rerank candidates with a cross-encoder (if available).
-        Returns the top-k results with text, metadata and score.
+        Returns full article text via parent-document retrieval.
         """
         try:
-            collection = self._get_legislation_collection()
-            if collection.count() == 0:
+            col = self._get_legislation_collection()
+            if col.count() == 0:
                 return []
 
-            where_filter = None
-            if categories and len(categories) == 1:
-                where_filter = {"category": categories[0]}
-            elif categories and len(categories) > 1:
-                where_filter = {"category": {"$in": categories}}
+            where = self._build_where(categories, query)
+            expanded = self._expand_query(query)
+            queries = [query] + ([expanded] if expanded != query else [])
 
-            # Stage 1: bi-encoder retrieval with query expansion
-            expanded = self._expand_legal_query(query)
-            queries = [query]
-            if expanded != query:
-                queries.append(expanded)
-
-            fetch_k = min(30, collection.count())
-            seen_ids: set[str] = set()
+            # ── Stage 1: Semantic retrieval ────────────────────────────
+            fetch_k = min(30, col.count())
+            seen: set[str] = set()
             candidates: list[dict] = []
 
             for q in queries:
-                # Encode query with proper E5 prefix
                 q_emb = self._embed_fn.encode_queries([q])
-                kwargs = {
-                    "query_embeddings": q_emb,
-                    "n_results": fetch_k,
-                }
-                if where_filter:
-                    kwargs["where"] = where_filter
+                kw = {"query_embeddings": q_emb, "n_results": fetch_k}
+                if where:
+                    kw["where"] = where
+                res = col.query(**kw, include=["documents", "metadatas", "distances"])
 
-                results = collection.query(
-                    **kwargs, include=["documents", "metadatas", "distances"]
-                )
+                if not res["documents"] or not res["documents"][0]:
+                    continue
+                for cid, doc, meta, dist in zip(
+                    res["ids"][0], res["documents"][0],
+                    res["metadatas"][0], res["distances"][0]
+                ):
+                    if cid in seen:
+                        continue
+                    seen.add(cid)
+                    score = max(0, round(1.0 - dist, 4))
+                    candidates.append({
+                        "id": cid, "text": doc, "score": score,
+                        "bm25_rank": float("inf"), "bi_rank": 0,
+                        **{k: meta.get(k, "") for k in
+                           ("law_title", "article_number", "article_title",
+                            "category", "full_article")},
+                    })
 
-                if results["documents"] and results["documents"][0]:
-                    docs = results["documents"][0]
-                    metas = results["metadatas"][0] if results["metadatas"] else [{}] * len(docs)
-                    dists = results["distances"][0] if results["distances"] else [0.0] * len(docs)
-                    ids = results["ids"][0] if results["ids"] else [str(i) for i in range(len(docs))]
+            # ── Stage 2: BM25 lexical retrieval ────────────────────────
+            bm25 = self._bm25.get("model")
+            bm25_corpus = self._bm25.get("corpus", [])
+            bm25_meta = self._bm25.get("meta", [])
 
-                    for chunk_id, doc, meta, dist in zip(ids, docs, metas, dists):
-                        if chunk_id in seen_ids:
-                            continue
-                        seen_ids.add(chunk_id)
-                        bi_score = round(1.0 - dist, 4) if dist <= 1.0 else round(1.0 / (1.0 + dist), 4)
+            if bm25 and bm25_corpus:
+                tokens = query.lower().split()
+                scores = bm25.get_scores(tokens)
+                ranked = sorted(enumerate(scores), key=lambda x: x[1], reverse=True)[:fetch_k]
+
+                for rank, (idx, sc) in enumerate(ranked, 1):
+                    if sc <= 0 or idx >= len(bm25_corpus):
+                        continue
+                    meta = bm25_meta[idx] if idx < len(bm25_meta) else {}
+                    if not self._meta_passes_filter(meta, where):
+                        continue
+
+                    doc = bm25_corpus[idx]
+                    existing = next((c for c in candidates if c["text"] == doc), None)
+                    if existing:
+                        existing["bm25_rank"] = rank
+                    else:
                         candidates.append({
-                            "text": doc,
-                            "law_title": meta.get("law_title", ""),
-                            "article_number": meta.get("article_number", ""),
-                            "category": meta.get("category", ""),
-                            "summary": meta.get("summary", ""),
-                            "bi_score": bi_score,
-                            "score": bi_score,
+                            "id": f"bm25_{idx}", "text": doc, "score": 0.0,
+                            "bm25_rank": rank, "bi_rank": float("inf"),
+                            **{k: meta.get(k, "") for k in
+                               ("law_title", "article_number", "article_title",
+                                "category", "full_article")},
                         })
 
-            # Stage 2: cross-encoder reranking
+            # ── Stage 3: Reciprocal Rank Fusion ────────────────────────
+            candidates.sort(key=lambda x: x["score"], reverse=True)
+            for r, c in enumerate(candidates, 1):
+                c["bi_rank"] = r if c["score"] > 0 else float("inf")
+
+            K = 60
+            for c in candidates:
+                s1 = 1.0 / (K + c["bi_rank"]) if c["bi_rank"] != float("inf") else 0
+                s2 = 1.0 / (K + c["bm25_rank"]) if c["bm25_rank"] != float("inf") else 0
+                c["rrf"] = s1 + s2
+
+            candidates.sort(key=lambda x: x["rrf"], reverse=True)
+            candidates = candidates[:fetch_k]
+
+            # ── Stage 4: Cross-encoder reranking ───────────────────────
+            self._ensure_reranker()
             if self._reranker and candidates:
                 pairs = [[query, c["text"][:512]] for c in candidates]
                 try:
-                    rerank_scores = self._reranker.predict(pairs)
-                    for c, rs in zip(candidates, rerank_scores):
-                        c["score"] = round(float(rs), 4)
+                    re_scores = self._reranker.predict(pairs)
+                    for c, s in zip(candidates, re_scores):
+                        c["final_score"] = round(float(s), 4)
                 except Exception:
-                    pass
+                    for c in candidates:
+                        c["final_score"] = c["rrf"]
+            else:
+                for c in candidates:
+                    c["final_score"] = c["rrf"]
 
-            candidates.sort(key=lambda x: x["score"], reverse=True)
+            candidates.sort(key=lambda x: x["final_score"], reverse=True)
 
-            result = []
-            for c in candidates[:top_k]:
-                result.append({
-                    "text": c["text"],
+            # ── Parent-document dedup: prefer full_article over point ──
+            seen_arts: set[str] = set()
+            results: list[dict] = []
+            for c in candidates:
+                art_key = f"{c['law_title']}::{c['article_number']}"
+                if art_key in seen_arts:
+                    continue
+                seen_arts.add(art_key)
+
+                text = c.get("full_article") or c["text"]
+                text = text[:4000]
+
+                results.append({
+                    "text": text,
                     "law_title": c["law_title"],
                     "article_number": c["article_number"],
                     "category": c["category"],
-                    "score": c["score"],
+                    "score": c["final_score"],
                 })
-            return result
-        except Exception:
+                if len(results) >= top_k:
+                    break
+
+            return results
+        except Exception as e:
+            logger.error("search_relevant_laws failed: %s", e)
             return []
 
+    # ── Helpers ─────────────────────────────────────────────────────────
+
     @staticmethod
-    def _expand_legal_query(query: str) -> str:
-        """Add legal synonyms to the query to improve recall."""
+    def _build_where(categories: list[str] | None, query: str) -> dict | None:
+        parts = []
+        if categories and len(categories) == 1:
+            parts.append({"category": categories[0]})
+        elif categories and len(categories) > 1:
+            parts.append({"category": {"$in": categories}})
+
+        if len(parts) == 0:
+            return None
+        if len(parts) == 1:
+            return parts[0]
+        return {"$and": parts}
+
+    @staticmethod
+    def _meta_passes_filter(meta: dict, where: dict | None) -> bool:
+        if not where:
+            return True
+        if "$and" in where:
+            return all(RAGService._meta_passes_filter(meta, sub) for sub in where["$and"])
+        for field, cond in where.items():
+            if field.startswith("$"):
+                continue
+            val = meta.get(field, "")
+            if isinstance(cond, dict):
+                op = next(iter(cond))
+                if op == "$in" and val not in cond[op]:
+                    return False
+            elif val != cond:
+                return False
+        return True
+
+    @staticmethod
+    def _expand_query(query: str) -> str:
         lower = query.lower()
-        additions = []
-        for key, expansion in LEGAL_SYNONYMS.items():
-            if key in lower:
-                additions.append(expansion)
-        if additions:
-            return query + " " + " ".join(additions)
-        return query
+        adds = [exp for key, exp in LEGAL_SYNONYMS.items() if key in lower]
+        return query + " " + " ".join(adds) if adds else query
 
     def delete_legislation(self, doc_id: str) -> None:
         try:
-            collection = self._get_legislation_collection()
-            existing = collection.get(where={"doc_id": doc_id})
+            col = self._get_legislation_collection()
+            existing = col.get(where={"doc_id": doc_id})
             if existing["ids"]:
-                collection.delete(ids=existing["ids"])
+                col.delete(ids=existing["ids"])
+            self._rebuild_bm25()
         except Exception:
             pass
 
     def get_legislation_stats(self) -> dict:
         try:
-            collection = self._get_legislation_collection()
-            return {"total_chunks": collection.count()}
+            col = self._client.get_or_create_collection(name=LEGISLATION_COLLECTION)
+            return {"total_chunks": col.count()}
         except Exception:
             return {"total_chunks": 0}
 
-    # ── Text chunking ──────────────────────────────────────────────────
+    # ═══════════════════════════════════════════════════════════════════
+    # Sentence-aware chunking — NEVER cuts mid-sentence
+    # ═══════════════════════════════════════════════════════════════════
 
     @staticmethod
-    def _chunk_text(text: str) -> list[str]:
-        """Split text into ~512-word overlapping chunks."""
-        text = re.sub(r"\s+", " ", text).strip()
+    def _sentence_chunk(text: str, max_words: int = 400, overlap_words: int = 80) -> list[str]:
+        """Split text at sentence boundaries, respecting max chunk size."""
+        text = re.sub(r"[ \t]+", " ", text).strip()
         if not text:
             return []
-        words = text.split()
+
+        sentences = re.split(r"(?<=[.!?;])\s+(?=[А-ЯA-Z0-9«\"])", text)
+        if not sentences:
+            return [text]
+
         chunks = []
-        start = 0
-        while start < len(words):
-            end = start + CHUNK_SIZE
-            chunk = " ".join(words[start:end])
-            if chunk.strip():
-                chunks.append(chunk.strip())
-            start += CHUNK_SIZE - CHUNK_OVERLAP
-        return chunks
+        current: list[str] = []
+        current_len = 0
+
+        for sent in sentences:
+            sent_len = len(sent.split())
+            if current_len + sent_len > max_words and current:
+                chunks.append(" ".join(current))
+                overlap_sents = []
+                overlap_len = 0
+                for s in reversed(current):
+                    sl = len(s.split())
+                    if overlap_len + sl > overlap_words:
+                        break
+                    overlap_sents.insert(0, s)
+                    overlap_len += sl
+                current = overlap_sents
+                current_len = overlap_len
+
+            current.append(sent)
+            current_len += sent_len
+
+        if current:
+            chunks.append(" ".join(current))
+
+        return [c for c in chunks if len(c.split()) > 5]
+
+    # Legacy compatibility aliases
+    @staticmethod
+    def _chunk_text(text: str) -> list[str]:
+        return RAGService._sentence_chunk(text, max_words=400, overlap_words=80)
 
     @staticmethod
     def _chunk_text_large(text: str) -> list[str]:
-        """Larger chunks for legislation (800 words, 160 overlap — ~20%)."""
-        text = re.sub(r"\s+", " ", text).strip()
-        if not text:
-            return []
-        words = text.split()
-        chunks = []
-        start = 0
-        while start < len(words):
-            end = start + LEG_CHUNK_SIZE
-            chunk = " ".join(words[start:end])
-            if chunk.strip():
-                chunks.append(chunk.strip())
-            start += LEG_CHUNK_SIZE - LEG_CHUNK_OVERLAP
-        return chunks
+        return RAGService._sentence_chunk(text, max_words=600, overlap_words=120)
 
     @staticmethod
     def _chunk_legislation(text: str, law_title: str) -> list[dict]:
-        """Split legislation text at article boundaries."""
-        pattern = r"(Статья\s+(\d+[\.\d]*)[\.\s\)])"
-        splits = re.split(pattern, text, flags=re.IGNORECASE)
+        """Legacy: use LegislationParser instead."""
+        articles = LegislationParser.parse(text, law_title)
+        result = []
+        for art in articles:
+            result.append({
+                "text": art["full_text"],
+                "article_number": art["number"],
+                "law_title": law_title,
+            })
+        return result
 
-        if len(splits) < 4:
-            return []
-
-        articles = []
-        i = 0
-        while i < len(splits):
-            if i + 3 <= len(splits) and re.match(pattern, splits[i + 1] if i + 1 < len(splits) else "", re.IGNORECASE):
-                article_header = splits[i + 1]
-                article_num = splits[i + 2]
-                article_body = splits[i + 3] if i + 3 < len(splits) else ""
-                full_text = (article_header + article_body).strip()
-
-                if len(full_text.split()) > 1600:
-                    sub_chunks = RAGService._chunk_text_large(full_text)
-                    for sc in sub_chunks:
-                        articles.append({
-                            "text": sc,
-                            "article_number": article_num,
-                            "law_title": law_title,
-                        })
-                elif full_text:
-                    articles.append({
-                        "text": full_text,
-                        "article_number": article_num,
-                        "law_title": law_title,
-                    })
-                i += 4
-            else:
-                preamble = splits[i].strip()
-                if preamble and len(preamble.split()) > 20:
-                    articles.append({
-                        "text": preamble,
-                        "article_number": "",
-                        "law_title": law_title,
-                    })
-                i += 1
-
-        return articles
+    # ═══════════════════════════════════════════════════════════════════
+    # Article parser for UI display
+    # ═══════════════════════════════════════════════════════════════════
 
     @staticmethod
     def parse_articles(text: str) -> list[dict]:
-        """Parse legislation text into a list of {number, title, text} for UI display."""
-        pattern = r"Статья\s+(\d+[\.\d]*)\s*[\.\)]\s*(.*?)(?=Статья\s+\d+[\.\d]*\s*[\.\)]|$)"
-        matches = re.findall(pattern, text, flags=re.DOTALL | re.IGNORECASE)
-        articles = []
-        for num, body in matches:
-            lines = body.strip().split("\n", 1)
-            title = lines[0].strip().rstrip(".") if lines else ""
-            art_text = lines[1].strip() if len(lines) > 1 else body.strip()
-            articles.append({"number": num, "title": title[:200], "text": art_text[:2000]})
-        return articles
+        """Parse legislation for UI tree view."""
+        articles = LegislationParser.parse(text, "")
+        return [
+            {"number": a["number"], "title": a["title"][:300], "text": a["full_text"][:5000]}
+            for a in articles
+        ]
+
+    @staticmethod
+    def _clean_article_title(raw: str) -> str:
+        return LegislationParser._clean_title(raw, "")

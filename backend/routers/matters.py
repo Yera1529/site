@@ -44,6 +44,8 @@ async def get_authorized_matter(
 
 @router.get("", response_model=List[MatterListResponse])
 async def list_matters(
+    page: int = 1,
+    limit: int = 50,
     user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ):
@@ -56,7 +58,10 @@ async def list_matters(
             .where(MatterUser.user_id == user.id)
             .order_by(Matter.updated_at.desc())
         )
-    result = await db.execute(query.options(selectinload(Matter.files)))
+    offset = (max(1, page) - 1) * min(limit, 200)
+    result = await db.execute(
+        query.options(selectinload(Matter.files)).offset(offset).limit(min(limit, 200))
+    )
     matters = result.scalars().all()
 
     response = []

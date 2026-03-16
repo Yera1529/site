@@ -2,6 +2,7 @@
 
 import uuid
 import json
+import logging
 from typing import List, Optional
 from fastapi import APIRouter, Depends, HTTPException, Query
 from sqlalchemy import select
@@ -9,9 +10,12 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from database import get_db
 from models.user import User
+from models.matter import MatterUser
 from models.representation import Representation
 from schemas.representation import RepresentationCreate, RepresentationUpdate, RepresentationResponse
 from routers.auth import get_current_user
+
+logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/api/representations", tags=["representations"])
 
@@ -32,10 +36,20 @@ def _to_response(r: Representation) -> RepresentationResponse:
     )
 
 
+async def _get_user_matter_ids(user: User, db: AsyncSession) -> set[uuid.UUID]:
+    """Return the set of matter IDs the user has access to."""
+    result = await db.execute(
+        select(MatterUser.matter_id).where(MatterUser.user_id == user.id)
+    )
+    return {row[0] for row in result.all()}
+
+
 @router.get("", response_model=List[RepresentationResponse])
 async def list_representations(
     matter_id: Optional[uuid.UUID] = Query(None),
     status: Optional[str] = Query(None),
+    page: int = Query(1, ge=1),
+    limit: int = Query(50, ge=1, le=200),
     user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ):
@@ -44,10 +58,25 @@ async def list_representations(
         stmt = stmt.where(Representation.matter_id == matter_id)
     if status:
         stmt = stmt.where(Representation.status == status)
+
     if user.role != "admin":
-        stmt = stmt.where(Representation.created_by == user.id)
-    result = await db.execute(stmt)
+        allowed_ids = await _get_user_matter_ids(user, db)
+        stmt = stmt.where(Representation.matter_id.in_(allowed_ids))
+
+    offset = (page - 1) * limit
+    result = await db.execute(stmt.offset(offset).limit(limit))
     return [_to_response(r) for r in result.scalars().all()]
+
+
+async def _check_rep_access(
+    rep: Representation, user: User, db: AsyncSession
+) -> None:
+    """Raise 403 if non-admin user doesn't have access to the representation's matter."""
+    if user.role == "admin":
+        return
+    allowed_ids = await _get_user_matter_ids(user, db)
+    if rep.matter_id not in allowed_ids:
+        raise HTTPException(status_code=403, detail="Нет доступа к данному делу")
 
 
 @router.post("", response_model=RepresentationResponse, status_code=201)
@@ -56,6 +85,11 @@ async def create_representation(
     user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ):
+    if user.role != "admin":
+        allowed_ids = await _get_user_matter_ids(user, db)
+        if data.matter_id not in allowed_ids:
+            raise HTTPException(status_code=403, detail="Нет доступа к данному делу")
+
     rep = Representation(
         matter_id=data.matter_id,
         template_id=data.template_id,
@@ -81,8 +115,7 @@ async def get_representation(
     rep = result.scalar_one_or_none()
     if not rep:
         raise HTTPException(status_code=404, detail="Представление не найдено")
-    if user.role != "admin" and rep.created_by != user.id:
-        raise HTTPException(status_code=403, detail="Нет доступа")
+    await _check_rep_access(rep, user, db)
     return _to_response(rep)
 
 
@@ -97,8 +130,7 @@ async def update_representation(
     rep = result.scalar_one_or_none()
     if not rep:
         raise HTTPException(status_code=404, detail="Представление не найдено")
-    if user.role != "admin" and rep.created_by != user.id:
-        raise HTTPException(status_code=403, detail="Нет доступа")
+    await _check_rep_access(rep, user, db)
 
     if data.title is not None:
         rep.title = data.title
@@ -126,6 +158,5 @@ async def delete_representation(
     rep = result.scalar_one_or_none()
     if not rep:
         raise HTTPException(status_code=404, detail="Представление не найдено")
-    if user.role != "admin" and rep.created_by != user.id:
-        raise HTTPException(status_code=403, detail="Нет доступа")
+    await _check_rep_access(rep, user, db)
     await db.delete(rep)

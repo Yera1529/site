@@ -33,7 +33,7 @@ class SelectedLaw(BaseModel):
 
 class GenerateDocumentRequest(BaseModel):
     matter_id: uuid.UUID
-    template_name: str
+    template_name: Optional[str] = None   # больше не обязателен — правила в промпте
     additional_instructions: Optional[str] = ""
     selected_laws: Optional[List[SelectedLaw]] = None
 
@@ -60,6 +60,7 @@ class CitationCheckResponse(BaseModel):
 class GenerateDocumentResponse(BaseModel):
     content: str
     template_name: str
+    representation_id: Optional[uuid.UUID] = None
     validation: Optional[ValidationReport] = None
     retrieved_laws: Optional[List[RetrievedLawResponse]] = None
     citation_check: Optional[CitationCheckResponse] = None

@@ -10,6 +10,7 @@
   },
   "dependencies": {
     "@tiptap/extension-blockquote": "^2.11.5",
+    "@tiptap/extension-bubble-menu": "^2.11.5",
     "@tiptap/extension-bullet-list": "^2.11.5",
     "@tiptap/extension-color": "^2.11.5",
     "@tiptap/extension-font-family": "^2.11.5",
@@ -25,10 +26,13 @@
     "@tiptap/pm": "^2.11.5",
     "@tiptap/react": "^2.11.5",
     "@tiptap/starter-kit": "^2.11.5",
+    "clsx": "^2.1.1",
+    "framer-motion": "^11.11.0",
     "lucide-react": "^0.469.0",
     "next": "^15.1.0",
     "react": "^19.0.0",
-    "react-dom": "^19.0.0"
+    "react-dom": "^19.0.0",
+    "tailwind-merge": "^2.5.4"
   },
   "devDependencies": {
     "@types/node": "^22.10.0",

@@ -52,7 +52,7 @@ export default function RepresentationsPage() {
   };
 
   const handleOpen = (rep: RepresentationItem) => {
-    router.push(`/matters/${rep.matter_id}`);
+    router.push(`/matters/${rep.matter_id}?rep_id=${rep.id}`);
   };
 
   const fmtDate = (iso: string) =>

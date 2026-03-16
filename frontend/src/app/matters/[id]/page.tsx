@@ -1,7 +1,7 @@
 "use client";
 
 import { useState, useEffect, useCallback, useRef } from "react";
-import { useRouter, useParams } from "next/navigation";
+import { useRouter, useParams, useSearchParams } from "next/navigation";
 import { useAuth } from "@/lib/auth";
 import { api } from "@/lib/api";
 import Navbar from "@/components/Navbar";
@@ -16,7 +16,6 @@ import {
   Settings2,
   Save,
   Sparkles,
-  ChevronDown,
   FileText,
   ListChecks,
   Clock,
@@ -37,7 +36,9 @@ export default function MatterDetailPage() {
   const { user, loading: authLoading } = useAuth();
   const router = useRouter();
   const params = useParams();
+  const searchParams = useSearchParams();
   const matterId = params.id as string;
+  const repIdFromUrl = searchParams.get("rep_id");
 
   const [matter, setMatter] = useState<Matter | null>(null);
   const [files, setFiles] = useState<FileItem[]>([]);
@@ -49,7 +50,6 @@ export default function MatterDetailPage() {
   const [instructions, setInstructions] = useState("");
   const [savingInstructions, setSavingInstructions] = useState(false);
   const [generating, setGenerating] = useState(false);
-  const [selectedTemplate, setSelectedTemplate] = useState("");
   const [additionalInstructions, setAdditionalInstructions] = useState("");
   const [showGenDialog, setShowGenDialog] = useState(false);
   const [loading, setLoading] = useState(true);
@@ -67,7 +67,11 @@ export default function MatterDetailPage() {
   const [selectedLaws, setSelectedLaws] = useState<Set<number>>(new Set());
   const [searchingLaws, setSearchingLaws] = useState(false);
   const [citationCheck, setCitationCheck] = useState<CitationCheck | null>(null);
+  const [currentRepId, setCurrentRepId] = useState<string | null>(null);
+  const [editorSaving, setEditorSaving] = useState(false);
+  const [editorLastSaved, setEditorLastSaved] = useState("");
   const autoSaveTimer = useRef<NodeJS.Timeout | null>(null);
+  const editorSaveTimer = useRef<NodeJS.Timeout | null>(null);
 
   useEffect(() => {
     if (!authLoading && !user) router.replace("/login");
@@ -98,6 +102,44 @@ export default function MatterDetailPage() {
   useEffect(() => {
     if (user && matterId) loadMatter();
   }, [user, matterId, loadMatter]);
+
+  useEffect(() => {
+    if (!repIdFromUrl || loading) return;
+    (async () => {
+      try {
+        const rep = (await api.getRepresentation(repIdFromUrl)) as any;
+        if (rep && rep.content) {
+          setEditorContent(rep.content);
+          setCurrentRepId(rep.id);
+          setActiveTab("editor");
+        }
+      } catch {
+        // representation not found or no access — ignore
+      }
+    })();
+  }, [repIdFromUrl, loading]);
+
+  const handleEditorChange = useCallback(
+    (html: string) => {
+      setEditorContent(html);
+      if (editorSaveTimer.current) clearTimeout(editorSaveTimer.current);
+      editorSaveTimer.current = setTimeout(async () => {
+        if (!currentRepId) return;
+        setEditorSaving(true);
+        try {
+          await api.updateRepresentation(currentRepId, { content: html });
+          setEditorLastSaved(
+            new Date().toLocaleTimeString("ru-RU", { hour: "2-digit", minute: "2-digit" })
+          );
+        } catch {
+          // silent — will retry on next change
+        } finally {
+          setEditorSaving(false);
+        }
+      }, 2000);
+    },
+    [currentRepId]
+  );
 
   const refreshFiles = useCallback(async () => {
     const f = (await api.listFiles(matterId)) as FileItem[];
@@ -161,7 +203,6 @@ export default function MatterDetailPage() {
   };
 
   const handleGenerate = async () => {
-    if (!selectedTemplate) return;
     setShowGenDialog(false);
     setGenerating(true);
     setGenError("");
@@ -173,15 +214,17 @@ export default function MatterDetailPage() {
       const lawsToSend = retrievedLaws.filter((_, i) => selectedLaws.has(i));
       const res = (await api.generateDocument(
         matterId,
-        selectedTemplate,
+        "",  // template_name не передаётся — ИИ сам определяет структуру по правилам
         additionalInstructions,
         lawsToSend.length > 0 ? lawsToSend : undefined
       )) as {
         content: string;
+        representation_id?: string;
         validation?: { ok: boolean; missing: string[]; present: string[] };
         citation_check?: CitationCheck;
       };
       setEditorContent(res.content);
+      if (res.representation_id) setCurrentRepId(res.representation_id);
       if (res.validation) setValidationResult(res.validation);
       if (res.citation_check) setCitationCheck(res.citation_check);
       await refreshMessages();
@@ -323,12 +366,12 @@ export default function MatterDetailPage() {
               </div>
             </div>
 
-            {/* Step 1: Template + instructions */}
+            {/* Step 1: instructions only */}
             {wizardStep === 1 && (
               <div className="space-y-4">
                 <div className="flex items-center gap-2 flex-wrap">
                   <span className="flex items-center gap-1 text-xs text-gray-600 bg-gray-100 px-2 py-1 rounded">
-                    <BrainCircuit className="w-3 h-3" />Qwen3-30B-A3B
+                    <BrainCircuit className="w-3 h-3" />Gemini AI
                   </span>
                   {kbStats && kbStats.total_chunks > 0 && (
                     <span className="flex items-center gap-1 text-xs text-brand-600 bg-brand-50 px-2 py-1 rounded">
@@ -336,18 +379,9 @@ export default function MatterDetailPage() {
                     </span>
                   )}
                 </div>
-                <div>
-                  <label className="block text-sm font-medium text-gray-700 mb-1">Шаблон</label>
-                  <div className="relative">
-                    <select value={selectedTemplate} onChange={(e) => setSelectedTemplate(e.target.value)} className="w-full px-4 py-2.5 rounded-lg border border-gray-300 text-sm appearance-none focus:outline-none focus:ring-2 focus:ring-brand-500">
-                      <option value="">Выберите шаблон…</option>
-                      {templates.map((t) => (<option key={t.id} value={t.name}>{t.name}</option>))}
-                    </select>
-                    <ChevronDown className="absolute right-3 top-1/2 -translate-y-1/2 w-4 h-4 text-gray-400 pointer-events-none" />
-                  </div>
-                  {templates.length === 0 && (
-                    <p className="text-xs text-amber-600 mt-1">Шаблоны не загружены.</p>
-                  )}
+                <div className="bg-brand-50 border border-brand-200 rounded-lg px-4 py-3 text-xs text-brand-700 flex items-start gap-2">
+                  <Scale className="w-4 h-4 mt-0.5 flex-shrink-0" />
+                  <span>ИИ самостоятельно определит адресата и структуру представления по фактам дела и выбранным нормам закона.</span>
                 </div>
                 <div>
                   <label className="block text-sm font-medium text-gray-700 mb-1">Дополнительные указания</label>
@@ -355,7 +389,7 @@ export default function MatterDetailPage() {
                 </div>
                 <div className="flex items-center gap-3 pt-2">
                   <button onClick={() => { setShowGenDialog(false); setWizardStep(1); }} className="flex-1 py-2.5 border border-gray-300 text-gray-700 text-sm font-medium rounded-lg hover:bg-gray-50">Отмена</button>
-                  <button onClick={handleSearchLaws} disabled={!selectedTemplate || searchingLaws} className="flex-1 py-2.5 bg-brand-600 text-white text-sm font-medium rounded-lg hover:bg-brand-700 disabled:opacity-50 flex items-center justify-center gap-2">
+                  <button onClick={handleSearchLaws} disabled={searchingLaws} className="flex-1 py-2.5 bg-brand-600 text-white text-sm font-medium rounded-lg hover:bg-brand-700 disabled:opacity-50 flex items-center justify-center gap-2">
                     {searchingLaws ? <Loader2 className="w-4 h-4 animate-spin" /> : <ArrowRight className="w-4 h-4" />}
                     Далее — поиск законов
                   </button>
@@ -387,7 +421,7 @@ export default function MatterDetailPage() {
                         <div className="flex items-center gap-2">
                           <span className="text-xs font-medium text-gray-900">{law.law_title}</span>
                           {law.article_number && <span className="text-[10px] bg-brand-50 text-brand-700 px-1.5 py-0.5 rounded">ст.{law.article_number}</span>}
-                          <span className="text-[10px] text-gray-400 ml-auto">{(law.score * 100).toFixed(0)}%</span>
+                          <span className="text-[10px] text-gray-400 ml-auto">{Math.round(Math.max(0, Math.min(100, (law.score - 0.45) / (0.9 - 0.45) * 100)))}%</span>
                         </div>
                         <p className="text-xs text-gray-500 mt-0.5 line-clamp-2">{law.text.substring(0, 200)}</p>
                       </div>
@@ -398,7 +432,7 @@ export default function MatterDetailPage() {
                   <button onClick={() => setWizardStep(1)} className="flex items-center justify-center gap-1 flex-1 py-2.5 border border-gray-300 text-gray-700 text-sm font-medium rounded-lg hover:bg-gray-50">
                     <ArrowLeft className="w-4 h-4" />Назад
                   </button>
-                  <button onClick={handleGenerate} disabled={!selectedTemplate} className="flex-1 py-2.5 bg-brand-600 text-white text-sm font-medium rounded-lg hover:bg-brand-700 disabled:opacity-50 flex items-center justify-center gap-2">
+                  <button onClick={handleGenerate} className="flex-1 py-2.5 bg-brand-600 text-white text-sm font-medium rounded-lg hover:bg-brand-700 disabled:opacity-50 flex items-center justify-center gap-2">
                     <Sparkles className="w-4 h-4" />Сгенерировать ({selectedLaws.size} норм)
                   </button>
                 </div>
@@ -450,29 +484,19 @@ export default function MatterDetailPage() {
 
                   {templates.length === 0 ? (
                     <p className="text-xs text-gray-400 text-center mt-4">
-                      Шаблоны не загружены
+                      Бланки не загружены
                     </p>
                   ) : (
                     templates.map((t) => (
-                      <div key={t.id} className="flex flex-col gap-0.5">
-                        <button
-                          onClick={() => handleLoadTemplate(t.id)}
-                          disabled={loadingTemplate}
-                          className="w-full text-left px-3 py-2.5 rounded-lg text-sm hover:bg-brand-50 text-gray-600 hover:text-brand-700 transition-colors flex items-center gap-2"
-                        >
-                          <FileText className="w-4 h-4 text-brand-400 flex-shrink-0" />
-                          <span className="truncate">{t.name}</span>
-                        </button>
-                        <button
-                          onClick={() => {
-                            setSelectedTemplate(t.name);
-                            setShowGenDialog(true);
-                          }}
-                          className="ml-7 text-left text-xs text-brand-500 hover:text-brand-700 hover:underline transition-colors"
-                        >
-                          Сгенерировать по шаблону
-                        </button>
-                      </div>
+                      <button
+                        key={t.id}
+                        onClick={() => handleLoadTemplate(t.id)}
+                        disabled={loadingTemplate}
+                        className="w-full text-left px-3 py-2.5 rounded-lg text-sm hover:bg-brand-50 text-gray-600 hover:text-brand-700 transition-colors flex items-center gap-2"
+                      >
+                        <FileText className="w-4 h-4 text-brand-400 flex-shrink-0" />
+                        <span className="truncate">{t.name}</span>
+                      </button>
                     ))
                   )}
                 </div>
@@ -585,9 +609,9 @@ export default function MatterDetailPage() {
                   ) : (
                     <DocumentEditor
                       content={editorContent}
-                      onContentChange={setEditorContent}
-                      saving={autoSaving}
-                      lastSaved={lastSaved}
+                      onContentChange={handleEditorChange}
+                      saving={editorSaving}
+                      lastSaved={editorLastSaved}
                     />
                   )}
                 </div>

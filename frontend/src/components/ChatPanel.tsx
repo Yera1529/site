@@ -3,7 +3,8 @@
 import { useState, useRef, useEffect } from "react";
 import { ChatMessage } from "@/types";
 import { api } from "@/lib/api";
-import { Send, Loader2, Bot, User, Clock } from "lucide-react";
+import { Send, Loader2, Bot, User, Sparkles } from "lucide-react";
+import { motion, AnimatePresence } from "framer-motion";
 
 interface ChatPanelProps {
   matterId: string;
@@ -16,16 +17,26 @@ export default function ChatPanel({ matterId, messages, onMessagesUpdated }: Cha
   const [streaming, setStreaming] = useState(false);
   const [streamContent, setStreamContent] = useState("");
   const bottomRef = useRef<HTMLDivElement>(null);
+  const textareaRef = useRef<HTMLTextAreaElement>(null);
 
   useEffect(() => {
     bottomRef.current?.scrollIntoView({ behavior: "smooth" });
-  }, [messages, streamContent]);
+  }, [messages, streamContent, streaming]);
+
+  const adjustHeight = () => {
+    const el = textareaRef.current;
+    if (el) {
+      el.style.height = "auto";
+      el.style.height = Math.min(el.scrollHeight, 120) + "px";
+    }
+  };
 
   const handleSend = async () => {
     const msg = input.trim();
     if (!msg || streaming) return;
 
     setInput("");
+    if (textareaRef.current) textareaRef.current.style.height = "44px";
     setStreaming(true);
     setStreamContent("");
 
@@ -50,108 +61,139 @@ export default function ChatPanel({ matterId, messages, onMessagesUpdated }: Cha
   };
 
   return (
-    <div className="flex flex-col h-full bg-gray-50">
+    <div className="flex flex-col h-full bg-gradient-to-b from-slate-50 to-white relative">
+      {/* Subtle background pattern */}
+      <div
+        className="absolute inset-0 opacity-[0.015] pointer-events-none"
+        style={{
+          backgroundImage: `radial-gradient(circle at 1px 1px, #0033aa 1px, transparent 0)`,
+          backgroundSize: "32px 32px",
+        }}
+      />
+
       {/* Messages */}
-      <div className="flex-1 overflow-y-auto px-4 py-4 space-y-4">
+      <div className="flex-1 overflow-y-auto overflow-x-hidden px-6 py-6 space-y-5 relative z-10">
         {messages.length === 0 && !streaming && (
-          <div className="flex flex-col items-center justify-center h-full text-gray-400">
-            <Bot className="w-12 h-12 mb-3 text-gray-300" />
-            <p className="text-sm font-medium">Начните диалог</p>
-            <p className="text-xs mt-1 text-center max-w-xs">
-              Задайте вопрос по материалам дела или запросите создание документа.
+          <motion.div
+            initial={{ opacity: 0, y: 24 }}
+            animate={{ opacity: 1, y: 0 }}
+            transition={{ duration: 0.5, ease: [0.4, 0, 0.2, 1] }}
+            className="flex flex-col items-center justify-center h-full py-20 text-center"
+          >
+            <div className="animate-float mb-6">
+              <div className="w-20 h-20 rounded-2xl bg-gradient-to-br from-brand-600 to-brand-800 flex items-center justify-center shadow-lg shadow-brand-500/30">
+                <Bot className="w-10 h-10 text-white" />
+              </div>
+            </div>
+            <h3 className="text-lg font-semibold text-gray-800 mb-2">ИИ-ассистент МВД РК</h3>
+            <p className="text-sm text-gray-500 max-w-xs leading-relaxed">
+              Задайте вопрос по материалам дела, попросите проанализировать документ или подготовить выжимку из фабулы.
             </p>
-          </div>
+            <div className="flex gap-2 mt-6 flex-wrap justify-center">
+              {["Кратко изложи фабулу дела", "Какие нарушения выявлены?", "Какие законы применимы?"].map((hint) => (
+                <button
+                  key={hint}
+                  onClick={() => { setInput(hint); textareaRef.current?.focus(); }}
+                  className="text-xs px-3 py-1.5 rounded-full border border-brand-200 text-brand-600 hover:bg-brand-50 transition-colors"
+                >
+                  {hint}
+                </button>
+              ))}
+            </div>
+          </motion.div>
         )}
 
-        {messages.map((msg) => (
-          <div
-            key={msg.id}
-            className={`flex gap-3 ${msg.role === "user" ? "justify-end" : "justify-start"}`}
-          >
-            {msg.role === "assistant" && (
-              <div className="w-8 h-8 rounded-full bg-brand-100 flex items-center justify-center flex-shrink-0">
-                <Bot className="w-4 h-4 text-brand-700" />
-              </div>
-            )}
-            <div
-              className={`max-w-[75%] rounded-2xl px-4 py-3 ${
-                msg.role === "user"
-                  ? "bg-brand-600 text-white"
-                  : "bg-white border border-gray-200 text-gray-800"
-              }`}
+        <AnimatePresence initial={false}>
+          {messages.map((msg, idx) => (
+            <motion.div
+              key={msg.id}
+              initial={{ opacity: 0, y: 12 }}
+              animate={{ opacity: 1, y: 0 }}
+              transition={{ duration: 0.3, delay: idx === messages.length - 1 ? 0 : 0 }}
+              className={`flex gap-3 ${msg.role === "user" ? "justify-end" : "justify-start"}`}
             >
-              <div className="text-sm whitespace-pre-wrap leading-relaxed">{msg.content}</div>
-              <div
-                className={`flex items-center gap-1 mt-1 text-xs ${
-                  msg.role === "user" ? "text-brand-200" : "text-gray-400"
-                }`}
-              >
-                <Clock className="w-3 h-3" />
-                {formatTime(msg.created_at)}
+              {msg.role === "assistant" && (
+                <div className="w-8 h-8 rounded-xl bg-gradient-to-br from-brand-600 to-brand-800 flex items-center justify-center flex-shrink-0 shadow-sm mt-0.5">
+                  <Bot className="w-4 h-4 text-white" />
+                </div>
+              )}
+              <div className={msg.role === "user" ? "chat-bubble-user" : "chat-bubble-ai"}>
+                <div className="text-sm leading-relaxed break-words" style={{ overflowWrap: "anywhere", wordBreak: "break-word", whiteSpace: "pre-wrap" }}>{msg.content}</div>
+                <div className={`flex items-center gap-1 mt-2 text-xs ${msg.role === "user" ? "text-white/60" : "text-gray-400"}`}>
+                  {msg.role === "assistant" && <Sparkles className="w-3 h-3" />}
+                  <span>{formatTime(msg.created_at)}</span>
+                </div>
               </div>
-            </div>
-            {msg.role === "user" && (
-              <div className="w-8 h-8 rounded-full bg-gray-200 flex items-center justify-center flex-shrink-0">
-                <User className="w-4 h-4 text-gray-600" />
-              </div>
-            )}
-          </div>
-        ))}
+              {msg.role === "user" && (
+                <div className="w-8 h-8 rounded-xl bg-gray-200 flex items-center justify-center flex-shrink-0 mt-0.5">
+                  <User className="w-4 h-4 text-gray-500" />
+                </div>
+              )}
+            </motion.div>
+          ))}
+        </AnimatePresence>
 
         {streaming && (
-          <div className="flex gap-3 justify-start">
-            <div className="w-8 h-8 rounded-full bg-brand-100 flex items-center justify-center flex-shrink-0">
-              <Bot className="w-4 h-4 text-brand-700" />
+          <motion.div
+            initial={{ opacity: 0, y: 8 }}
+            animate={{ opacity: 1, y: 0 }}
+            className="flex gap-3 justify-start"
+          >
+            <div className="w-8 h-8 rounded-xl bg-gradient-to-br from-brand-600 to-brand-800 flex items-center justify-center flex-shrink-0 mt-0.5 shadow-sm">
+              <Bot className="w-4 h-4 text-white" />
             </div>
-            <div className="max-w-[75%] rounded-2xl px-4 py-3 bg-white border border-gray-200 text-gray-800">
+            <div className="chat-bubble-ai generating-shimmer">
               {streamContent ? (
-                <div className="text-sm whitespace-pre-wrap leading-relaxed">{streamContent}</div>
+                <div className="text-sm leading-relaxed relative z-10 break-words" style={{ overflowWrap: "anywhere", wordBreak: "break-word", whiteSpace: "pre-wrap" }}>{streamContent}</div>
               ) : (
-                <div className="flex items-center gap-2 text-sm text-gray-500">
-                  <Loader2 className="w-4 h-4 animate-spin" />
-                  <span>Обработка запроса…</span>
+                <div className="flex items-center gap-2 py-1">
+                  <div className="thinking-dots flex gap-1.5">
+                    <span /><span /><span />
+                  </div>
+                  <span className="text-sm text-gray-400">Анализирую...</span>
                 </div>
               )}
             </div>
-          </div>
+          </motion.div>
         )}
 
-        <div ref={bottomRef} />
+        <div ref={bottomRef} className="h-1" />
       </div>
 
       {/* Input */}
-      <div className="border-t border-gray-200 bg-white p-4">
-        <div className="flex items-end gap-3">
-          <textarea
-            value={input}
-            onChange={(e) => setInput(e.target.value)}
-            onKeyDown={(e) => {
-              if (e.key === "Enter" && !e.shiftKey) {
-                e.preventDefault();
-                handleSend();
-              }
-            }}
-            placeholder="Задайте вопрос по материалам дела…"
-            rows={1}
-            className="flex-1 resize-none rounded-xl border border-gray-300 px-4 py-3 text-sm
-              focus:outline-none focus:ring-2 focus:ring-brand-500 focus:border-transparent
-              placeholder:text-gray-400"
-            style={{ minHeight: 44, maxHeight: 120 }}
-          />
+      <div className="p-4 border-t border-gray-100 bg-white/80 backdrop-blur-sm z-20">
+        <div className="max-w-3xl mx-auto flex items-end gap-2">
+          <div className="flex-1 relative border border-gray-200 rounded-2xl bg-white shadow-sm focus-within:border-brand-400 focus-within:ring-2 focus-within:ring-brand-500/15 transition-all duration-200">
+            <textarea
+              ref={textareaRef}
+              value={input}
+              onChange={(e) => { setInput(e.target.value); adjustHeight(); }}
+              onKeyDown={(e) => {
+                if (e.key === "Enter" && !e.shiftKey) {
+                  e.preventDefault();
+                  handleSend();
+                }
+              }}
+              placeholder="Задайте вопрос по делу... (Enter — отправить, Shift+Enter — новая строка)"
+              rows={1}
+              className="w-full resize-none bg-transparent px-4 py-3 text-sm text-gray-900 focus:outline-none placeholder:text-gray-400 rounded-2xl"
+              style={{ minHeight: 44, maxHeight: 120 }}
+            />
+          </div>
           <button
             onClick={handleSend}
             disabled={!input.trim() || streaming}
-            className="flex items-center justify-center w-11 h-11 rounded-xl bg-brand-600
-              text-white hover:bg-brand-700 disabled:opacity-50 disabled:cursor-not-allowed
-              transition-colors flex-shrink-0"
+            className="btn-primary w-11 h-11 p-0 flex-shrink-0 rounded-xl"
+            title="Отправить (Enter)"
           >
-            {streaming ? (
-              <Loader2 className="w-5 h-5 animate-spin" />
-            ) : (
-              <Send className="w-5 h-5" />
-            )}
+            {streaming
+              ? <Loader2 className="w-4 h-4 animate-spin" />
+              : <Send className="w-4 h-4" />}
           </button>
         </div>
+        <p className="text-center text-[10px] text-gray-400 mt-2">
+          ИИ может допускать ошибки. Проверяйте важную информацию. • Qwen3-30B
+        </p>
       </div>
     </div>
   );

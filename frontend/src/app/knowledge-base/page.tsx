@@ -58,8 +58,14 @@ export default function KnowledgeBasePage() {
   };
 
   useEffect(() => {
-    if (user?.role === "admin") loadData();
-  }, [user]);
+    if (!authLoading) {
+      if (user?.role === "admin") {
+        loadData();
+      } else {
+        setLoading(false);
+      }
+    }
+  }, [user, authLoading]);
 
   const handleUpload = async (fileList: FileList | null) => {
     if (!fileList || fileList.length === 0) return;
@@ -241,13 +247,12 @@ export default function KnowledgeBasePage() {
                     <AlertCircle className="w-3 h-3 text-amber-500 flex-shrink-0" />
                   )}
                   <span
-                    className={`truncate ${
-                      u.status === "error"
+                    className={`truncate ${u.status === "error"
                         ? "text-red-600"
                         : u.status === "skipped"
-                        ? "text-amber-600"
-                        : "text-gray-600"
-                    }`}
+                          ? "text-amber-600"
+                          : "text-gray-600"
+                      }`}
                   >
                     {u.name}
                   </span>

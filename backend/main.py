@@ -14,10 +14,27 @@ from routers.legislation import router as legislation_router
 from routers.representations import router as representations_router
 
 
+import asyncio
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     await init_db()
+    # Pre-warm RAGService in background thread so the first API request
+    # doesn't block the event loop while SentenceTransformer loads (~30s)
+    asyncio.create_task(asyncio.to_thread(_init_rag))
     yield
+
+
+def _init_rag():
+    try:
+        from services.rag import RAGService
+        RAGService()
+        import logging
+        logging.getLogger(__name__).info("RAGService pre-warmed successfully")
+    except Exception as e:
+        import logging
+        logging.getLogger(__name__).warning("RAGService pre-warm failed: %s", e)
+
 
 
 app = FastAPI(

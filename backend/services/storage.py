@@ -67,7 +67,44 @@ class StorageService:
 
     @staticmethod
     def _extract_docx(path: str) -> str:
-        return docx2txt.process(path)
+        """Extract text from DOCX using python-docx for full coverage:
+        paragraphs, tables (with cell content), and headers/footers.
+        docx2txt misses tables which often contain names, dates, case numbers.
+        """
+        from docx import Document as DocxDocument
+        doc = DocxDocument(path)
+        parts = []
+
+        # Main body paragraphs
+        for para in doc.paragraphs:
+            text = para.text.strip()
+            if text:
+                parts.append(text)
+
+        # Tables — critical for extracting FIO, dates, case numbers
+        for table in doc.tables:
+            for row in table.rows:
+                row_parts = []
+                for cell in row.cells:
+                    cell_text = cell.text.strip()
+                    if cell_text:
+                        row_parts.append(cell_text)
+                if row_parts:
+                    parts.append(" | ".join(row_parts))
+
+        # Headers and footers (may contain investigator name, department)
+        for section in doc.sections:
+            for hdr_para in section.header.paragraphs:
+                text = hdr_para.text.strip()
+                if text:
+                    parts.append(f"[Колонтитул: {text}]")
+            for ftr_para in section.footer.paragraphs:
+                text = ftr_para.text.strip()
+                if text:
+                    parts.append(f"[Нижний колонтитул: {text}]")
+
+        return "\n".join(parts)
+
 
     @staticmethod
     def _extract_rtf(path: str) -> str:

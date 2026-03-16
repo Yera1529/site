@@ -1,15 +1,21 @@
-"""AI service for Qwen3-30B-A3B (30B total / 3.3B active MoE, 32k–131k context).
+"""AI service powered by Google Gemini (gemini-2.5-pro-exp-03-25).
+
+Uses the official google-genai SDK (pip install google-genai).
 
 Generates strictly structured representations per Article 200 of the Criminal
 Procedure Code of Kazakhstan with 8 mandatory sections, law citations grounded
 in retrieved legislation, cause-effect analysis, and liability warnings.
 """
 
-import json
 import re
-import httpx
+import logging
+import asyncio
 from typing import AsyncGenerator, List, Dict, Optional
+from google import genai
+from google.genai import types as genai_types
 from config import get_settings
+
+logger = logging.getLogger(__name__)
 
 # ---------------------------------------------------------------------------
 # Eight mandatory sections derived from the official Instruction (ст.200 УПК)
@@ -55,19 +61,29 @@ MANDATORY_SECTIONS_SPEC = """\
 """
 
 DOCUMENT_STRUCTURE = """\
-Форматирование документа:
+Форматирование документа (ОБЯЗАТЕЛЬНО соблюдать):
 1. Шапка адресатов (руководители организаций) — по правому краю
 2. Пустая строка
 3. «П Р Е Д С Т А В Л Е Н И Е» — по центру, заглавными с пробелами
 4. «по устранению обстоятельств, способствовавших совершению уголовного
    правонарушения и других нарушений закона» — по центру
-5. Дата слева, город справа
+5. Дата слева, город справа — ОБЯЗАТЕЛЬНО на одной строке:
+   <p><span style="float:left">ДД.ММ.ГГГГ г.</span><span style="float:right">г. [Название города]</span></p>
+   <div style="clear:both"></div>
 6. Текст: вводная часть, нарушения, нормы, причинная связь — абзацы с выравниванием по ширине
 7. «На основании изложенного, руководствуясь ст.200 УПК РК, ПРЕДЛАГАЮ:»
 8. Нумерованный список мер
 9. Указание о месячном сроке
 10. Предупреждение об ответственности по ст.479, 664 КоАП
-11. Подпись: должность, звание, ФИО
+11. Подпись — ОБЯЗАТЕЛЬНО: должность следователя слева, ФИО справа:
+    <p>[Должность и орган]</p>
+    <p><span style="float:left">[звание]</span><span style="float:right">[Фамилия И.О.]</span></p>
+    <div style="clear:both"></div>
+
+КРИТИЧЕСКИЕ ПРАВИЛА HTML:
+• Строки «дата / город» и «звание / ФИО» ДОЛЖНЫ использовать float:left и float:right
+• После каждой float-строки ОБЯЗАТЕЛЬНО добавь <div style="clear:both"></div>
+• НЕ используй &nbsp; для создания отступов — используй float-spans
 """
 
 FEW_SHOT_EXAMPLE = """\
@@ -148,6 +164,115 @@ LAW_TO_CITATION_DEMO = """\
 """
 
 # ---------------------------------------------------------------------------
+# Точные правила построения каждого раздела (заменяют шаблоны)
+# ---------------------------------------------------------------------------
+REPRESENTATION_RULES = """\
+══════════════════ ПРАВИЛА ПОСТРОЕНИЯ КАЖДОГО РАЗДЕЛА ══════════════════
+
+ПРАВИЛО 0 — ВЫБОР АДРЕСАТА (определи ДО написания шапки)
+  Проанализируй фабулу дела и выбери организацию-адресата по ключевым признакам:
+  • ДТП, дороги, освещение, ямы → «Акиму [района/города]» и/или «Руководителю управления дорог»
+  • Охрана труда, производство, предприятие → «Руководителю [название организации]»
+  • Пожарная безопасность → «Начальнику ДЧС [города]»  
+  • Банк, финансы → «Председателю правления [название банка]»
+  • ДУИС, осуждённые, колония → «Начальнику учреждения [ДУИС]»
+  • Иностранные граждане → «Начальнику Миграционной полиции» / «КНБ»
+  • Суицид/психическое здоровье → «Руководителю МКИ» + «Акиму»
+  • Несовершеннолетние → «Руководителю органа опеки» + «Директору школы/учреждения»
+  • Государственная служба → «Руководителю государственного органа»
+  ❌ Запрещено: использовать адресата из примеров или базы знаний, придумывать организацию
+  ✅ Если адресат не определяется из документов — пиши «Руководителю [организация не установлена]»
+
+РАЗДЕЛ 1 — ШАПКА-АДРЕСАТ (форматирование: правый край)
+  Формат (каждая строка — отдельный абзац по правому краю):
+    Должность руководителя в Дательном падеже
+    Название организации
+    Город
+  Пример: «Акиму района Алматы» / «Директору ТОО "Название"» / «г. Алматы»
+
+РАЗДЕЛ 2 — ЗАГОЛОВОК (по центру, строго дословно)
+  П Р Е Д С Т А В Л Е Н И Е
+  по устранению обстоятельств, способствовавших совершению уголовного
+  правонарушения и других нарушений закона
+  [ДАТА слева]                                    [ГОРОД справа]
+
+РАЗДЕЛ 3 — ФАБУЛА (первый абзац основного текста)
+  Обязательная структура:
+  «[Полное наименование следственного органа] проводит досудебное расследование
+  по уголовному делу №[ЕРДР] по подозрению [ФИО подозреваемого] в совершении
+  преступления, предусмотренного [ст. N ч. N] Уголовного кодекса Республики
+  Казахстан ([название состава преступления]).»
+  Следующий абзац: конкретные обстоятельства — дата, время, место, способ,
+  потерпевший, причинённый ущерб.
+  ❌ ЕРДР нет в документах → пиши «№[ЕРДР не указан]», ФИО нет → «[ФИО не установлено]»
+
+РАЗДЕЛ 4 — ВЫЯВЛЕННЫЕ НАРУШЕНИЯ (основная часть)
+  Для каждого нарушения — отдельный абзац по шаблону:
+  «[Организация/должностное лицо] не обеспечил(а)/допустил(а) [точное описание
+  нарушения], что является нарушением [ст. N Название закона], согласно которой
+  [краткая суть нормы — в одном предложении].»
+  Правила:
+  • Минимум 2 нарушения, максимум не ограничен
+  • Каждое нарушение → своя цитата из <legal_context>
+  • Если подходящей нормы нет в <legal_context> → «что нарушает требования
+    действующего законодательства (ст.200 УПК РК)» — без придуманных статей
+  • Конкретика: называй организацию, должностное лицо, дату если есть
+  
+РАЗДЕЛ 5 — ПРИЧИННО-СЛЕДСТВЕННАЯ СВЯЗЬ (отдельный абзац)
+  Обязательная структура:
+  «Таким образом, [перечисление нарушений: ненадлежащее исполнение/бездействие
+  конкретных лиц/организаций] создало(и) условия, при которых стало возможным
+  совершение данного уголовного правонарушения. Указанные нарушения находятся
+  в прямой причинно-следственной связи с совершённым преступлением.»
+  ❌ Запрещено: просто перечислять нарушения без объяснения связи с преступлением
+
+РАЗДЕЛ 6 — ПРАВОВОЕ ОСНОВАНИЕ И ОБЯЗАННОСТЬ РАССМОТРЕНИЯ
+  Обязательный абзац (дословно):
+  «В соответствии со ст.200 Уголовно-процессуального кодекса Республики Казахстан
+  установив при производстве по уголовному делу обстоятельства, способствовавшие
+  совершению уголовного правонарушения, лицо, осуществляющее досудебное
+  расследование, вправе внести в соответствующие государственные органы,
+  организации или лицам, исполняющим в них управленческие функции, представление
+  о принятии мер по устранению этих обстоятельств или других нарушений закона.
+  Представления подлежат рассмотрению с обязательным уведомлением о принятых
+  мерах в месячный срок.»
+
+РАЗДЕЛ 7 — РЕЗОЛЮТИВНАЯ ЧАСТЬ (ПРЕДЛАГАЮ)
+  Строго: «На основании изложенного, руководствуясь ст.200 Уголовно-процессуального
+  кодекса Республики Казахстан, ПРЕДЛАГАЮ:» (или ПРЕДЛАГАЕТСЯ)
+  Нумерованный список мер — ОБЯЗАТЕЛЬНЫЕ пункты:
+    1. «Рассмотреть настоящее представление с принятием мер по устранению
+       указанных в нём нарушений.»
+    2–N. По каждому нарушению из Раздела 4 — конкретная мера:
+       «[Глагол действия] [конкретное мероприятие] в соответствии с [правовое основание].»
+       Примеры: «Обеспечить уличное освещение...», «Принять меры по контролю...»,
+       «Привлечь к дисциплинарной ответственности лиц, допустивших нарушения»
+    Последний пункт всегда: «О принятых мерах письменно сообщить в месячный срок
+       со дня получения настоящего представления (ч.2 ст.200 УПК РК).»
+
+РАЗДЕЛ 8 — ПРЕДУПРЕЖДЕНИЕ ОБ ОТВЕТСТВЕННОСТИ
+  Строго дословно:
+  «Разъясняю, что невыполнение представления, а равно непредставление ответа
+  в установленный законом срок, влечёт ответственность по статьям 479 и 664
+  Кодекса об административных правонарушениях Республики Казахстан.»
+
+РАЗДЕЛ 9 — ПОДПИСЬ
+  ОБЯЗАТЕЛЬНО генерировать подпись в HTML с float-spans:
+  Строка 1 (только должность и орган — по левому краю обычный абзац):
+    <p>[Должность] [следственного органа]</p>
+  Строка 2 (звание слева, фамилия И.О. строго справа через float):
+    <p><span style="float:left">[звание]</span><span style="float:right">[И.О. Фамилия]</span></p>
+    <div style="clear:both"></div>
+  Пример:
+    <p>Следователь следственного отдела УП г. Астаны</p>
+    <p><span style="float:left">майор полиции</span><span style="float:right">А.Б. Иванов</span></p>
+    <div style="clear:both"></div>
+  ❌ Если ФИО/звание не найдено → вставь [ФИО] и [звание] как плейсхолдеры
+  ❌ Запрещено: использовать пробелы или &nbsp; для отступа ФИО
+══════════════════════════════════════════════════════════════════════════
+"""
+
+# ---------------------------------------------------------------------------
 # Mandatory section markers for post-generation validation
 # ---------------------------------------------------------------------------
 MANDATORY_SECTIONS = [
@@ -179,9 +304,7 @@ def validate_representation(text: str) -> dict:
 def validate_law_citations(
     generated_text: str, retrieved_laws: list[dict]
 ) -> dict:
-    """Check that cited articles in generated text match the retrieved law set.
-    Returns {cited: [str], unverified: [str]}.
-    """
+    """Check that cited articles in generated text match the retrieved law set."""
     cited_raw = re.findall(r"ст(?:атья|\.)\s*(\d+[\.\d]*)", generated_text, re.IGNORECASE)
     cited = sorted(set(cited_raw))
 
@@ -200,22 +323,16 @@ def validate_law_citations(
 class AIService:
     def __init__(self):
         settings = get_settings()
-        self.api_url = settings.ai_api_url
         self.api_key = settings.ai_api_key
-        self.model = settings.ai_model
-        self.thinking_mode = getattr(settings, "ai_thinking_mode", "enabled")
+        self.model_name = settings.ai_model  # e.g. "gemini-2.5-pro-exp-03-25"
+        self._client = genai.Client(api_key=self.api_key)
 
-    def _get_headers(self) -> dict:
-        headers = {"Content-Type": "application/json"}
-        if self.api_key:
-            headers["Authorization"] = f"Bearer {self.api_key}"
-        return headers
-
-    def _get_sampling_params(self, override_thinking: Optional[bool] = None) -> dict:
-        thinking = override_thinking if override_thinking is not None else (self.thinking_mode == "enabled")
-        if thinking:
-            return {"temperature": 0.6, "top_p": 0.95, "top_k": 20}
-        return {"temperature": 0.7, "top_p": 0.8, "top_k": 20}
+    def _make_config(self, max_tokens: int = 16384) -> genai_types.GenerateContentConfig:
+        return genai_types.GenerateContentConfig(
+            temperature=0.7,
+            top_p=0.95,
+            max_output_tokens=max_tokens,
+        )
 
     # ── System prompt builders ────────────────────────────────────────
 
@@ -226,7 +343,7 @@ class AIService:
         kb_context: str = "",
     ) -> str:
         parts = [
-            "Ты — Qwen3, русскоязычный юридический ИИ-помощник МВД РК. "
+            "Ты — Gemini, русскоязычный юридический ИИ-помощник МВД РК. "
             "Ты специализируешься на составлении представлений по ст.200 "
             "Уголовно-процессуального кодекса Республики Казахстан. "
             "Отвечай точно, официально, строго по существу, опираясь "
@@ -258,72 +375,88 @@ class AIService:
 
     @staticmethod
     def build_generation_prompt(
-        template_text: str,
         facts: str,
         kb_context: str,
         custom_instructions: str,
         additional_instructions: str,
         retrieved_laws: list[dict] | None = None,
     ) -> tuple[str, str]:
+        """
+        Строит системный и пользовательский промпты для генерации представления
+        по ст.200 УПК РК. Шаблоны-файлы НЕ используются — только точные правила
+        построения каждого из 9 разделов документа.
+        """
         system = (
-            "Ты — Qwen3, следователь-юрист МВД РК. Составь представление "
-            "по ст.200 УПК РК, строго соблюдая все 8 обязательных разделов.\n\n"
+            "Ты — опытный следователь МВД Республики Казахстан со стажем 15 лет. "
+            "Составь юридически точное процессуальное представление по ст.200 УПК РК.\n\n"
             f"{MANDATORY_SECTIONS_SPEC}\n\n"
-            f"{DOCUMENT_STRUCTURE}\n\n"
+            f"{REPRESENTATION_RULES}\n\n"
             f"{FEW_SHOT_EXAMPLE}\n\n"
             f"{LAW_TO_CITATION_DEMO}\n\n"
-            "ПЕРЕД НАПИСАНИЕМ ПРОВЕДИ АНАЛИТИЧЕСКИЙ РАЗБОР (chain-of-thought):\n"
-            "Шаг 1: Определи ТИП ПРЕСТУПЛЕНИЯ и статью УК РК из фабулы дела.\n"
-            "Шаг 2: Выяви ПРИЧИНЫ И УСЛОВИЯ — какие действия/бездействия "
-            "организаций и должностных лиц создали возможность для преступления.\n"
-            "Шаг 3: Для КАЖДОГО выявленного нарушения найди КОНКРЕТНУЮ НОРМУ "
-            "из раздела «Нормативные акты» ниже. Подбери статью, которая "
-            "устанавливает обязанность, которая была нарушена.\n"
-            "Шаг 4: Построй ПРИЧИННО-СЛЕДСТВЕННУЮ ЦЕПОЧКУ: нарушение нормы → "
-            "создание условий → совершение преступления.\n"
-            "Шаг 5: Сформулируй КОНКРЕТНЫЕ МЕРЫ по устранению каждого "
-            "выявленного нарушения с указанием правового основания.\n"
-            "Шаг 6: Теперь напиши полное представление, включив результаты "
-            "аналитического разбора.\n\n"
-            "КРИТИЧЕСКИЕ ПРАВИЛА:\n"
-            "- Включи ВСЕ 8 разделов. Пропуск любого раздела НЕДОПУСТИМ.\n"
-            "- Цитируй ТОЛЬКО статьи из раздела «Нормативные акты» ниже.\n"
-            "- Для КАЖДОГО нарушения укажи конкретную статью и закон.\n"
-            "- Привязывай нормы к КОНКРЕТНЫМ фактам дела, а не абстрактно.\n"
-            "- Причинно-следственная связь ОБЯЗАТЕЛЬНА: используй фразы "
-            "«создало условия», «в прямой причинно-следственной связи», "
-            "«способствовало совершению».\n"
-            "- Если факты дела явно не описывают нарушения, ВЫЯВИ их сам: "
-            "проанализируй обязанности лиц и организаций по извлечённым "
-            "нормативным актам и определи, какие обязанности были нарушены.\n"
-            "- Каждая мера должна иметь правовое основание.\n"
-            "- В предупреждении ссылайся на ст.479 и 664 КоАП РК.\n"
-            "- Используй формальный юридический язык."
+            "═══════════════════════════════ АНАЛИТИЧЕСКИЙ РАЗБОР ═══════════════════════════════\n"
+            "ОБЯЗАТЕЛЬНО: выполни следующие шаги ВНУТРИ тегов <scratchpad>...</scratchpad>\n"
+            "ДО написания финального документа.\n\n"
+            "Шаг 0 — ИЗВЛЕЧЕНИЕ РЕКВИЗИТОВ (строго из документов дела):\n"
+            "  — Номер ЕРДР (ищи: ЕРДР, № дела, регистрационный номер)\n"
+            "  — ФИО подозреваемого/обвиняемого (точно из документа)\n"
+            "  — ФИО следователя/дознавателя, его должность и звание\n"
+            "  — Наименование следственного органа\n"
+            "  — Дата совершения преступления\n"
+            "  — Место совершения преступления\n"
+            "  — Статья УК РК (точный номер и часть)\n"
+            "  — Организации и должностные лица, чьи нарушения способствовали преступлению\n"
+            "  — АДРЕСАТ представления (по правилу 0 из REPRESENTATION_RULES)\n"
+            "Если реквизит не найден — пиши 'не указано в документах'. НЕ ПРИДУМЫВАЙ.\n\n"
+            "Шаг 1 — СУБЪЕКТ И КВАЛИФИКАЦИЯ: кто, что, по какой статье, номер ЕРДР\n"
+            "Шаг 2 — ПРИЧИНЫ И УСЛОВИЯ: конкретные действия/бездействия конкретных лиц\n"
+            "Шаг 3 — НОРМАТИВНОЕ СОПОСТАВЛЕНИЕ: каждое нарушение → норма из <legal_context>\n"
+            "         Нет нормы → 'норма не предоставлена', не придумывай статью\n"
+            "Шаг 4 — ЦЕПОЧКА: нарушение нормы → условие → преступление\n"
+            "Шаг 5 — МЕРЫ: каждое нарушение → конкретная мера + ответственный + основание\n\n"
+            "После </scratchpad> — полный документ в HTML.\n\n"
+            "═══════════════════════════════════════ КРИТИЧЕСКИЕ ПРАВИЛА ════════════════════════\n"
+            "❌ СТРОГО ЗАПРЕЩЕНО:\n"
+            "  — Цитировать статьи законов, которых НЕТ в <legal_context>\n"
+            "  — Использовать имена, организации, адреса, даты из примеров и базы знаний\n"
+            "  — Копировать текст из примеров — только стиль и структуру\n"
+            "  — Упоминать что-либо из примеров, чего НЕТ в фактах текущего дела\n"
+            "  — Общие фразы типа 'нарушены нормы' без конкретной статьи\n\n"
+            "✅ ОБЯЗАТЕЛЬНО:\n"
+            "  — Включи ВСЕ 9 разделов по REPRESENTATION_RULES\n"
+            "  — Адресат определяется ТОЛЬКО из фактов дела (правило 0)\n"
+            "  — Каждое нарушение → норма из <legal_context> или честное 'ст.200 УПК РК'\n"
+            "  — Причинно-следственная связь явная: нарушение → условие → преступление\n"
+            "  — Предупреждение: ст.479 и 664 КоАП РК\n"
+            "  — Официальный юридический язык без разговорных оборотов\n"
+            "════════════════════════════════════════════════════════════════════════════════════"
         )
         if custom_instructions:
-            system += f"\n\nИнструкции пользователя: {custom_instructions}"
+            system += f"\n\nИнструкции следователя: {custom_instructions}"
 
         # ── User prompt ───────────────────────────────────────────────
         user_parts = []
 
         user_parts.append(
-            "Составь полное представление по ст.200 УПК РК. Выполни следующие шаги:\n"
-            "1. Укажи дату, место составления, должность и ФИО следователя.\n"
-            "2. Кратко изложи фабулу и назови статью УК РК.\n"
-            "3. Подробно опиши выявленные нарушения (действия/бездействия) "
-            "и для КАЖДОГО нарушения назови нарушенную норму (номер статьи и название закона).\n"
-            "4. Раскрой причинно-следственную связь между каждым нарушением и преступлением.\n"
-            "5. Предложи конкретные меры по устранению с указанием правовых оснований.\n"
-            "6. Установи сроки исполнения в соответствии с ч.2 ст.200 УПК.\n"
-            "7. Внеси предупреждение об ответственности по ст.479 и 664 КоАП РК.\n"
-            "8. Структуру и заголовок не изменяй."
+            "Составь полное представление по ст.200 УПК РК, строго следуя REPRESENTATION_RULES.\n"
+            "Последовательность:\n"
+            "1. Выполни аналитический разбор в <scratchpad>\n"
+            "2. Определи адресата по Правилу 0\n"
+            "3. Напиши шапку-адресат (правый край)\n"
+            "4. Заголовок П Р Е Д С Т А В Л Е Н И Е (по центру)\n"
+            "5. Изложи фабулу с ЕРДР и ФИО из документов\n"
+            "6. Подробно опиши каждое нарушение с нормой из <legal_context>\n"
+            "7. Раскрой причинно-следственную связь\n"
+            "8. Вставь абзац о ст.200 УПК РК и месячном сроке\n"
+            "9. Напиши ПРЕДЛАГАЮ с нумерованным списком мер\n"
+            "10. Предупреждение об ответственности (ст.479, 664 КоАП)\n"
+            "11. Подпись следователя"
         )
 
         if retrieved_laws:
-            laws_section = "\n\n## Нормативные акты (извлечены из базы законодательства)\n"
+            laws_section = "\n\n<legal_context>\n"
             laws_section += (
-                "Ниже — нормы, применимые к данному делу. Используй ТОЛЬКО эти нормы "
-                "при указании нарушенных законов и мер. Для каждого нарушения в Разделе 3 "
+                "Ниже — нормы, применимые к данному делу. ИСПОЛЬЗУЙ ТОЛЬКО эти нормы "
+                "при указании нарушенных законов и мер. Для каждого нарушения "
                 "процитируй соответствующую статью из этого списка.\n\n"
             )
             for i, law in enumerate(retrieved_laws, 1):
@@ -331,32 +464,37 @@ class AIService:
                 art = law.get("article_number", "")
                 text = law.get("text", "")[:2000]
                 header = f"{title}, Статья {art}" if art else title
-                laws_section += f"{i}. {header}:\n   {text}\n\n"
+                laws_section += f'<law id="{i}">\n  <title>{header}</title>\n  <text>{text}</text>\n</law>\n'
+            laws_section += "</legal_context>\n"
             user_parts.append(laws_section)
 
-        if template_text:
-            user_parts.append(f"\n\n## Шаблон документа\n{template_text}")
         if kb_context:
             user_parts.append(
-                f"\n\n## Примеры из базы знаний\n"
-                f"Ориентируйся на стиль и структуру этих фрагментов:\n\n{kb_context}"
+                f"\n\n## Примеры из базы знаний (только стиль и структура)\n"
+                f"Ориентируйся ИСКЛЮЧИТЕЛЬНО на стиль, формулировки и структуру этих фрагментов.\n"
+                f"НЕ используй имена, организации, адреса и факты из примеров для текущего дела:\n\n"
+                f"{kb_context}"
             )
         if facts:
             user_parts.append(
-                f"\n\n## Факты из материалов дела\n"
-                f"Фабула: {facts[:24000]}"
+                f"\n\n## Факты текущего дела (ЕДИНСТВЕННЫЙ источник реквизитов)\n"
+                f"{facts[:24000]}"
             )
         if additional_instructions:
-            user_parts.append(f"\n\n## Дополнительные указания\n{additional_instructions}")
+            user_parts.append(f"\n\n## Дополнительные указания следователя\n{additional_instructions}")
 
         user_parts.append(
             "\n\nФорматируй результат в HTML:\n"
-            "- Шапку адресатов: <p style=\"text-align:right\">\n"
-            "- Заголовок: <h1 style=\"text-align:center\">П Р Е Д С Т А В Л Е Н И Е</h1>\n"
-            "- Подзаголовок: <h2 style=\"text-align:center\">по устранению…</h2>\n"
-            "- Основной текст: <p style=\"text-align:justify\">\n"
-            "- Список мер: <ol><li>\n"
-            "- Шрифт: Times New Roman 14pt, межстрочный интервал 1,5."
+            '- Шапку адресатов: <p style="text-align:right">\n'
+            '- Заголовок: <h1 style="text-align:center">П Р Е Д С Т А В Л Е Н И Е</h1>\n'
+            '- Подзаголовок: <h2 style="text-align:center">по устранению обстоятельств, '
+            'способствовавших совершению уголовного правонарушения и других нарушений закона</h2>\n'
+            '- Строка даты/города: <p><span style="float:left">[дата]</span>'
+            '<span style="float:right">[город]</span></p><div style="clear:both"></div>\n'
+            '- Основной текст: <p style="text-align:justify; font-family: Times New Roman; font-size:14pt; line-height:1.5">\n'
+            "- Список мер: <ol><li>...\n"
+            "- Предупреждение: <p style=\"text-align:justify\">\n"
+            '- Подпись: <p style="margin-top:2em">'
         )
 
         return system, "\n".join(user_parts)
@@ -392,74 +530,74 @@ class AIService:
         messages: List[Dict[str, str]],
         enable_thinking: Optional[bool] = None,
     ) -> AsyncGenerator[str, None]:
-        params = self._get_sampling_params(enable_thinking)
-        payload = {
-            "model": self.model,
-            "messages": messages,
-            "stream": True,
-            "max_tokens": 16384,
-            **params,
-        }
+        """Stream chat using Gemini google-genai SDK."""
 
-        async with httpx.AsyncClient(timeout=600.0) as client:
-            async with client.stream(
-                "POST", self.api_url, json=payload, headers=self._get_headers()
-            ) as response:
-                if response.status_code != 200:
-                    error_text = ""
-                    async for chunk in response.aiter_text():
-                        error_text += chunk
-                    yield f"[Ошибка связи с ИИ: {response.status_code} — {error_text[:200]}]"
-                    return
+        system_instruction = None
+        gemini_contents = []
 
-                async for line in response.aiter_lines():
-                    if not line.startswith("data: "):
-                        continue
-                    data = line[6:]
-                    if data.strip() == "[DONE]":
-                        break
-                    try:
-                        parsed = json.loads(data)
-                        delta = parsed.get("choices", [{}])[0].get("delta", {})
-                        content = delta.get("content", "")
-                        if content:
-                            yield content
-                    except (ValueError, KeyError, IndexError):
-                        continue
+        for msg in messages:
+            role = msg.get("role", "user")
+            content = msg.get("content", "")
+            if role == "system":
+                system_instruction = content
+            elif role == "user":
+                gemini_contents.append(
+                    genai_types.Content(role="user", parts=[genai_types.Part(text=content)])
+                )
+            elif role == "assistant":
+                gemini_contents.append(
+                    genai_types.Content(role="model", parts=[genai_types.Part(text=content)])
+                )
+
+        config = genai_types.GenerateContentConfig(
+            temperature=0.7,
+            top_p=0.95,
+            max_output_tokens=16384,
+            system_instruction=system_instruction,
+        )
+
+        try:
+            def _stream():
+                return self._client.models.generate_content_stream(
+                    model=self.model_name,
+                    contents=gemini_contents,
+                    config=config,
+                )
+
+            stream = await asyncio.to_thread(_stream)
+            for chunk in stream:
+                if chunk.text:
+                    yield chunk.text
+        except Exception as e:
+            logger.error("Gemini stream_chat error: %s", e)
+            yield f"[Ошибка Gemini API: {e}]"
 
     # ── Document generation (non-streaming, with validation + retry) ──
 
     async def generate_document(
         self,
-        template: str,
         facts: str,
         custom_instructions: str,
         additional_instructions: str,
         kb_context: str = "",
         retrieved_laws: list[dict] | None = None,
         enable_thinking: Optional[bool] = None,
+        # template аргумент оставлен для обратной совместимости вызовов, не используется
+        template: str = "",
     ) -> str:
+        """Generate a representation document without template injection.
+        Rules-based generation: the REPRESENTATION_RULES constant defines all
+        section structures. Template files are no longer injected into the prompt
+        to prevent fact contamination from sample documents.
+        """
         system_prompt, user_prompt = self.build_generation_prompt(
-            template_text=template,
             facts=facts,
             kb_context=kb_context,
             custom_instructions=custom_instructions,
             additional_instructions=additional_instructions,
             retrieved_laws=retrieved_laws,
         )
-
-        generated = await self._call_llm(system_prompt, user_prompt, enable_thinking)
-
-        validation = validate_representation(generated)
-        if not validation["ok"] and validation["missing"]:
-            refinement_prompt = self.build_refinement_prompt(
-                generated, validation["missing"]
-            )
-            generated = await self._call_llm(
-                system_prompt, refinement_prompt, enable_thinking
-            )
-
-        return generated
+        return await self._call_llm(system_prompt, user_prompt, enable_thinking)
 
     async def _call_llm(
         self,
@@ -467,32 +605,63 @@ class AIService:
         user_prompt: str,
         enable_thinking: Optional[bool] = None,
     ) -> str:
-        params = self._get_sampling_params(enable_thinking)
-        payload = {
-            "model": self.model,
-            "messages": [
-                {"role": "system", "content": system_prompt},
-                {"role": "user", "content": user_prompt},
-            ],
-            "stream": False,
-            "max_tokens": 8192,
-            **params,
-        }
+        config = genai_types.GenerateContentConfig(
+            temperature=0.7,
+            top_p=0.95,
+            max_output_tokens=65536,
+            system_instruction=system_prompt,
+        )
 
-        async with httpx.AsyncClient(timeout=600.0) as client:
-            response = await client.post(
-                self.api_url, json=payload, headers=self._get_headers()
+        contents = [
+            genai_types.Content(role="user", parts=[genai_types.Part(text=user_prompt)])
+        ]
+
+        try:
+            response = await asyncio.to_thread(
+                self._client.models.generate_content,
+                model=self.model_name,
+                contents=contents,
+                config=config,
             )
-            if response.status_code != 200:
-                raise Exception(
-                    f"Ошибка API ИИ: {response.status_code} — {response.text[:200]}"
-                )
+            content = response.text or ""
+            finish_reason = (
+                response.candidates[0].finish_reason
+                if response.candidates else "unknown"
+            )
+            logger.info(
+                "_call_llm: raw_len=%d finish_reason=%s",
+                len(content), finish_reason
+            )
 
-            data = response.json()
-            content = data["choices"][0]["message"]["content"]
+            # Safely strip thinking/scratchpad tags.
+            # IMPORTANT: only remove if the closing tag exists —
+            # otherwise the greedy regex deletes the ENTIRE document.
+            if "</think>" in content:
+                content = re.sub(r"<think>.*?</think>", "", content, flags=re.DOTALL)
+            elif "<think>" in content:
+                # Unclosed tag — just remove the opening tag and everything before useful text
+                content = content.split("<think>", 1)[-1]
 
-            content = re.sub(
-                r"<think>.*?</think>", "", content, flags=re.DOTALL
-            ).strip()
+            if "</scratchpad>" in content:
+                # Take only the text AFTER the closing scratchpad tag
+                content = content.split("</scratchpad>", 1)[-1]
+            elif "<scratchpad>" in content:
+                # Unclosed scratchpad — model put document after the tag (hopefully)
+                # Try to find the document start marker
+                for marker in ["<p ", "<h1", "П Р Е Д", "ПРЕДСТА", "ПРЕДСТАВЛЕНИЕ"]:
+                    if marker in content:
+                        idx = content.find(marker)
+                        content = content[idx:]
+                        break
+                else:
+                    # Can't find document — strip the scratchpad opening and return rest
+                    content = content.split("<scratchpad>", 1)[-1]
 
+            content = content.strip()
+            logger.info("_call_llm: cleaned_len=%d", len(content))
+            if not content:
+                logger.warning("_call_llm: empty content after cleanup! finish_reason=%s", finish_reason)
             return content
+        except Exception as e:
+            logger.error("Gemini _call_llm error: %s", e)
+            raise Exception(f"Ошибка Gemini API: {e}")

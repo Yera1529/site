@@ -52,6 +52,8 @@ async def list_categories(
 async def list_legislation(
     q: Optional[str] = Query(None),
     category: Optional[str] = Query(None),
+    page: int = Query(1, ge=1),
+    limit: int = Query(50, ge=1, le=200),
     user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ):
@@ -60,7 +62,8 @@ async def list_legislation(
         stmt = stmt.where(LegislationDoc.category == category)
     if q:
         stmt = stmt.where(LegislationDoc.title.ilike(f"%{q}%"))
-    result = await db.execute(stmt)
+    offset = (page - 1) * limit
+    result = await db.execute(stmt.offset(offset).limit(limit))
     return [_to_response(d) for d in result.scalars().all()]
 
 

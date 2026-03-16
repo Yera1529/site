@@ -1,5 +1,6 @@
 """File upload, download, listing, and deletion routes."""
 
+import logging
 import uuid
 from typing import List
 from fastapi import APIRouter, Depends, HTTPException, UploadFile, File as FastAPIFile
@@ -16,6 +17,8 @@ from routers.auth import get_current_user
 from routers.matters import get_authorized_matter
 from services.storage import StorageService
 from services.rag import RAGService
+
+logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/api/matters/{matter_id}/files", tags=["files"])
 
@@ -96,8 +99,8 @@ async def upload_file(
         try:
             rag = RAGService()
             rag.index_document(str(matter_id), str(db_file.id), extracted_text)
-        except Exception:
-            pass
+        except Exception as e:
+            logger.error("RAG indexing failed for file %s: %s", db_file.id, e)
 
     return FileSchema.model_validate(db_file)
 
@@ -154,7 +157,7 @@ async def delete_file(
     try:
         rag = RAGService()
         rag.delete_document(str(matter_id), str(file_id))
-    except Exception:
-        pass
+    except Exception as e:
+        logger.error("RAG deletion failed for file %s: %s", file_id, e)
 
     await db.delete(f)

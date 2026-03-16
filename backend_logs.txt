@@ -1,0 +1,33 @@
+INFO:     Will watch for changes in these directories: ['/app']
+INFO:     Uvicorn running on http://0.0.0.0:8000 (Press CTRL+C to quit)
+INFO:     Started reloader process [1] using WatchFiles
+INFO:     Started server process [8]
+INFO:     Waiting for application startup.
+INFO:     Application startup complete.
+Failed to send telemetry event ClientStartEvent: capture() takes 1 positional argument but 3 were given
+INFO:     172.19.0.1:50132 - "OPTIONS /api/auth/me HTTP/1.1" 200 OK
+INFO:     172.19.0.1:50132 - "GET /api/auth/me HTTP/1.1" 401 Unauthorized
+INFO:     172.19.0.1:47878 - "OPTIONS /api/auth/login HTTP/1.1" 200 OK
+INFO:     172.19.0.1:47878 - "POST /api/auth/login HTTP/1.1" 401 Unauthorized
+INFO:     172.19.0.1:47884 - "POST /api/auth/login HTTP/1.1" 401 Unauthorized
+INFO:     172.19.0.1:47884 - "POST /api/auth/login HTTP/1.1" 401 Unauthorized
+INFO:     172.19.0.1:47884 - "POST /api/auth/login HTTP/1.1" 401 Unauthorized
+INFO:     172.19.0.1:54490 - "POST /api/auth/login HTTP/1.1" 401 Unauthorized
+INFO:     172.19.0.1:54490 - "POST /api/auth/login HTTP/1.1" 401 Unauthorized
+INFO:     172.19.0.1:51056 - "POST /api/auth/login HTTP/1.1" 401 Unauthorized
+INFO:     172.19.0.1:51062 - "POST /api/auth/login HTTP/1.1" 401 Unauthorized
+INFO:     172.19.0.1:58508 - "POST /api/auth/login HTTP/1.1" 401 Unauthorized
+INFO:     172.19.0.1:46888 - "POST /api/auth/login HTTP/1.1" 401 Unauthorized
+INFO:     172.19.0.1:46888 - "POST /api/auth/login HTTP/1.1" 401 Unauthorized
+INFO:     172.19.0.1:57992 - "OPTIONS /api/auth/register HTTP/1.1" 200 OK
+INFO:     172.19.0.1:57992 - "POST /api/auth/register HTTP/1.1" 201 Created
+INFO:     172.19.0.1:57992 - "OPTIONS /api/matters HTTP/1.1" 200 OK
+INFO:     172.19.0.1:58006 - "OPTIONS /api/matters HTTP/1.1" 200 OK
+INFO:     172.19.0.1:57992 - "GET /api/matters HTTP/1.1" 200 OK
+INFO:     172.19.0.1:58006 - "GET /api/matters HTTP/1.1" 200 OK
+INFO:     172.19.0.1:58006 - "OPTIONS /api/knowledge-base HTTP/1.1" 200 OK
+INFO:     172.19.0.1:57992 - "OPTIONS /api/knowledge-base/stats HTTP/1.1" 200 OK
+INFO:     172.19.0.1:47862 - "OPTIONS /api/knowledge-base HTTP/1.1" 200 OK
+INFO:     172.19.0.1:47878 - "OPTIONS /api/knowledge-base/stats HTTP/1.1" 200 OK
+INFO:     172.19.0.1:57992 - "GET /api/knowledge-base HTTP/1.1" 200 OK
+INFO:     172.19.0.1:47878 - "GET /api/knowledge-base HTTP/1.1" 200 OK

@@ -1,0 +1,14 @@
+__pycache__
+*.pyc
+*.pyo
+.env
+.git
+.gitignore
+
+# Large document folders - not needed in container
+Библиотека
+Законы м
+Кодексы м
+
+# Storage (mounted as volume)
+storage/
