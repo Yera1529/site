@@ -642,11 +642,11 @@ class RAGService:
         ids, docs, metas = [], [], []
 
         for idx, rec in enumerate(records):
-            article_number = rec.get("article_number", "")
-            original_text = rec.get("original_text", "")
-            norm_type = rec.get("norm_type", "")
-            violation_criteria = rec.get("violation_criteria", "")
-            applicable_measures = rec.get("applicable_measures", "")
+            article_number = rec.get("article_number") or ""
+            original_text = rec.get("original_text") or ""
+            norm_type = rec.get("norm_type") or ""
+            violation_criteria = rec.get("violation_criteria") or ""
+            applicable_measures = rec.get("applicable_measures") or ""
 
             # Serialize complex fields
             subj = rec.get("subject_competence", {})

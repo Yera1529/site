@@ -1,43 +1,76 @@
-INFO:     Will watch for changes in these directories: ['/app']
-INFO:     Uvicorn running on http://0.0.0.0:8000 (Press CTRL+C to quit)
-INFO:     Started reloader process [1] using WatchFiles
-INFO:     Started server process [8]
-INFO:     Waiting for application startup.
-INFO:     Application startup complete.
-Failed to send telemetry event ClientStartEvent: capture() takes 1 positional argument but 3 were given
-INFO:     172.19.0.1:50132 - "OPTIONS /api/auth/me HTTP/1.1" 200 OK
-INFO:     172.19.0.1:50132 - "GET /api/auth/me HTTP/1.1" 401 Unauthorized
-INFO:     172.19.0.1:47878 - "OPTIONS /api/auth/login HTTP/1.1" 200 OK
-INFO:     172.19.0.1:47878 - "POST /api/auth/login HTTP/1.1" 401 Unauthorized
-INFO:     172.19.0.1:47884 - "POST /api/auth/login HTTP/1.1" 401 Unauthorized
-INFO:     172.19.0.1:47884 - "POST /api/auth/login HTTP/1.1" 401 Unauthorized
-INFO:     172.19.0.1:47884 - "POST /api/auth/login HTTP/1.1" 401 Unauthorized
-INFO:     172.19.0.1:54490 - "POST /api/auth/login HTTP/1.1" 401 Unauthorized
-INFO:     172.19.0.1:54490 - "POST /api/auth/login HTTP/1.1" 401 Unauthorized
-INFO:     172.19.0.1:51056 - "POST /api/auth/login HTTP/1.1" 401 Unauthorized
-INFO:     172.19.0.1:51062 - "POST /api/auth/login HTTP/1.1" 401 Unauthorized
-INFO:     172.19.0.1:58508 - "POST /api/auth/login HTTP/1.1" 401 Unauthorized
-INFO:     172.19.0.1:46888 - "POST /api/auth/login HTTP/1.1" 401 Unauthorized
-INFO:     172.19.0.1:46888 - "POST /api/auth/login HTTP/1.1" 401 Unauthorized
-INFO:     172.19.0.1:57992 - "OPTIONS /api/auth/register HTTP/1.1" 200 OK
-INFO:     172.19.0.1:57992 - "POST /api/auth/register HTTP/1.1" 201 Created
-INFO:     172.19.0.1:57992 - "OPTIONS /api/matters HTTP/1.1" 200 OK
-INFO:     172.19.0.1:58006 - "OPTIONS /api/matters HTTP/1.1" 200 OK
-INFO:     172.19.0.1:57992 - "GET /api/matters HTTP/1.1" 200 OK
-INFO:     172.19.0.1:58006 - "GET /api/matters HTTP/1.1" 200 OK
-INFO:     172.19.0.1:58006 - "OPTIONS /api/knowledge-base HTTP/1.1" 200 OK
-INFO:     172.19.0.1:57992 - "OPTIONS /api/knowledge-base/stats HTTP/1.1" 200 OK
-INFO:     172.19.0.1:47862 - "OPTIONS /api/knowledge-base HTTP/1.1" 200 OK
-INFO:     172.19.0.1:47878 - "OPTIONS /api/knowledge-base/stats HTTP/1.1" 200 OK
-INFO:     172.19.0.1:57992 - "GET /api/knowledge-base HTTP/1.1" 200 OK
-INFO:     172.19.0.1:47878 - "GET /api/knowledge-base HTTP/1.1" 200 OK
-INFO:     Will watch for changes in these directories: ['/app']
-INFO:     Uvicorn running on http://0.0.0.0:8000 (Press CTRL+C to quit)
-INFO:     Started reloader process [1] using WatchFiles
-INFO:     Started server process [8]
-INFO:     Waiting for application startup.
-INFO:     Application startup complete.
-Failed to send telemetry event ClientStartEvent: capture() takes 1 positional argument but 3 were given
-INFO:     172.19.0.1:33424 - "POST /api/auth/login HTTP/1.1" 200 OK
-INFO:     172.19.0.1:33424 - "GET /api/matters HTTP/1.1" 200 OK
-INFO:     172.19.0.1:33428 - "GET /api/matters HTTP/1.1" 200 OK
+backend-1  | INFO:     Will watch for changes in these directories: ['/app']
+backend-1  | INFO:     Uvicorn running on http://0.0.0.0:8000 (Press CTRL+C to quit)
+backend-1  | INFO:     Started reloader process [1] using WatchFiles
+backend-1  | INFO:     Started server process [8]
+backend-1  | INFO:     Waiting for application startup.
+backend-1  | INFO:     Application startup complete.
+backend-1  | Failed to send telemetry event ClientStartEvent: capture() takes 1 positional argument but 3 were given
+backend-1  | INFO:     172.19.0.1:48052 - "GET /api/auth/me HTTP/1.1" 200 OK
+backend-1  | INFO:     172.19.0.1:48052 - "GET /api/legislation HTTP/1.1" 200 OK
+backend-1  | INFO:     172.19.0.1:48062 - "GET /api/legislation/categories HTTP/1.1" 200 OK
+backend-1  | INFO:     172.19.0.1:32920 - "OPTIONS /api/legislation/import-jsonl HTTP/1.1" 200 OK
+backend-1  | Failed to send telemetry event ClientCreateCollectionEvent: capture() takes 1 positional argument but 3 were given
+backend-1  | Failed to send telemetry event ClientCreateCollectionEvent: capture() takes 1 positional argument but 3 were given
+backend-1  | Failed to send telemetry event CollectionGetEvent: capture() takes 1 positional argument but 3 were given
+backend-1  | Failed to send telemetry event ClientCreateCollectionEvent: capture() takes 1 positional argument but 3 were given
+backend-1  | Failed to send telemetry event ClientCreateCollectionEvent: capture() takes 1 positional argument but 3 were given
+backend-1  | Failed to send telemetry event ClientCreateCollectionEvent: capture() takes 1 positional argument but 3 were given
+backend-1  | Failed to send telemetry event ClientCreateCollectionEvent: capture() takes 1 positional argument but 3 were given
+backend-1  | Failed to send telemetry event ClientCreateCollectionEvent: capture() takes 1 positional argument but 3 were given
+backend-1  | Failed to send telemetry event ClientCreateCollectionEvent: capture() takes 1 positional argument but 3 were given
+backend-1  | Failed to send telemetry event ClientCreateCollectionEvent: capture() takes 1 positional argument but 3 were given
+backend-1  | INFO:     172.19.0.1:32920 - "POST /api/legislation/import-jsonl HTTP/1.1" 500 Internal Server Error
+backend-1  | ERROR:    Exception in ASGI application
+backend-1  | Traceback (most recent call last):
+backend-1  |   File "/usr/local/lib/python3.12/site-packages/uvicorn/protocols/http/httptools_impl.py", line 409, in run_asgi
+backend-1  |     result = await app(  # type: ignore[func-returns-value]
+backend-1  |              ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+backend-1  |   File "/usr/local/lib/python3.12/site-packages/uvicorn/middleware/proxy_headers.py", line 60, in __call__
+backend-1  |     return await self.app(scope, receive, send)
+backend-1  |            ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+backend-1  |   File "/usr/local/lib/python3.12/site-packages/fastapi/applications.py", line 1054, in __call__
+backend-1  |     await super().__call__(scope, receive, send)
+backend-1  |   File "/usr/local/lib/python3.12/site-packages/starlette/applications.py", line 113, in __call__
+backend-1  |     await self.middleware_stack(scope, receive, send)
+backend-1  |   File "/usr/local/lib/python3.12/site-packages/starlette/middleware/errors.py", line 187, in __call__
+backend-1  |     raise exc
+backend-1  |   File "/usr/local/lib/python3.12/site-packages/starlette/middleware/errors.py", line 165, in __call__
+backend-1  |     await self.app(scope, receive, _send)
+backend-1  |   File "/usr/local/lib/python3.12/site-packages/starlette/middleware/cors.py", line 93, in __call__
+backend-1  |     await self.simple_response(scope, receive, send, request_headers=headers)
+backend-1  |   File "/usr/local/lib/python3.12/site-packages/starlette/middleware/cors.py", line 144, in simple_response
+backend-1  |     await self.app(scope, receive, send)
+backend-1  |   File "/usr/local/lib/python3.12/site-packages/starlette/middleware/exceptions.py", line 62, in __call__
+backend-1  |     await wrap_app_handling_exceptions(self.app, conn)(scope, receive, send)
+backend-1  |   File "/usr/local/lib/python3.12/site-packages/starlette/_exception_handler.py", line 53, in wrapped_app
+backend-1  |     raise exc
+backend-1  |   File "/usr/local/lib/python3.12/site-packages/starlette/_exception_handler.py", line 42, in wrapped_app
+backend-1  |     await app(scope, receive, sender)
+backend-1  |   File "/usr/local/lib/python3.12/site-packages/starlette/routing.py", line 715, in __call__
+backend-1  |     await self.middleware_stack(scope, receive, send)
+backend-1  |   File "/usr/local/lib/python3.12/site-packages/starlette/routing.py", line 735, in app
+backend-1  |     await route.handle(scope, receive, send)
+backend-1  |   File "/usr/local/lib/python3.12/site-packages/starlette/routing.py", line 288, in handle
+backend-1  |     await self.app(scope, receive, send)
+backend-1  |   File "/usr/local/lib/python3.12/site-packages/starlette/routing.py", line 76, in app
+backend-1  |     await wrap_app_handling_exceptions(app, request)(scope, receive, send)
+backend-1  |   File "/usr/local/lib/python3.12/site-packages/starlette/_exception_handler.py", line 53, in wrapped_app
+backend-1  |     raise exc
+backend-1  |   File "/usr/local/lib/python3.12/site-packages/starlette/_exception_handler.py", line 42, in wrapped_app
+backend-1  |     await app(scope, receive, sender)
+backend-1  |   File "/usr/local/lib/python3.12/site-packages/starlette/routing.py", line 73, in app
+backend-1  |     response = await f(request)
+backend-1  |                ^^^^^^^^^^^^^^^^
+backend-1  |   File "/usr/local/lib/python3.12/site-packages/fastapi/routing.py", line 301, in app
+backend-1  |     raw_response = await run_endpoint_function(
+backend-1  |                    ^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+backend-1  |   File "/usr/local/lib/python3.12/site-packages/fastapi/routing.py", line 212, in run_endpoint_function
+backend-1  |     return await dependant.call(**values)
+backend-1  |            ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+backend-1  |   File "/app/routers/legislation.py", line 326, in import_legislation_jsonl
+backend-1  |     chunk_count = rag.index_legislation_jsonl(
+backend-1  |                   ^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+backend-1  |   File "/app/services/rag.py", line 686, in index_legislation_jsonl
+backend-1  |     "violation_criteria": violation_criteria[:2000],
+backend-1  |                           ~~~~~~~~~~~~~~~~~~^^^^^^^
+backend-1  | TypeError: 'NoneType' object is not subscriptable

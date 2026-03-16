@@ -293,14 +293,14 @@ async def import_legislation_jsonl(
         # Build human-readable content from enriched fields
         content_parts = [f"# {law_name}\n"]
         for rec in law_records:
-            art_num = rec.get("article_number", "")
-            original = rec.get("original_text", "")
-            norm_type = rec.get("norm_type", "")
-            violation = rec.get("violation_criteria", "")
-            measures = rec.get("applicable_measures", "")
+            art_num = rec.get("article_number") or ""
+            original = rec.get("original_text") or ""
+            norm_type = rec.get("norm_type") or ""
+            violation = rec.get("violation_criteria") or ""
+            measures = rec.get("applicable_measures") or ""
             if isinstance(measures, list):
-                measures = "; ".join(measures)
-            subj = rec.get("subject_competence", {})
+                measures = "; ".join(str(m) for m in measures)
+            subj = rec.get("subject_competence") or {}
             if isinstance(subj, dict):
                 subj_str = f"{subj.get('organ', '')} — {subj.get('competence', '')}"
             elif isinstance(subj, list):
