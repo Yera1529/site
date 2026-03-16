@@ -8,7 +8,7 @@ import Navbar from "@/components/Navbar";
 import { LegislationDoc, ArticleNode } from "@/types";
 import {
   Upload, Trash2, Loader2, Scale, Search, RefreshCw, ChevronDown,
-  ChevronRight, FileText, Filter, X, BookOpen, Layers,
+  ChevronRight, FileText, Filter, X, BookOpen, Layers, FileJson,
 } from "lucide-react";
 
 export default function LegislationPage() {
@@ -27,6 +27,8 @@ export default function LegislationPage() {
   const [uploadYear, setUploadYear] = useState("");
   const [uploading, setUploading] = useState(false);
   const inputRef = useRef<HTMLInputElement>(null);
+  const jsonlInputRef = useRef<HTMLInputElement>(null);
+  const [importingJsonl, setImportingJsonl] = useState(false);
 
   const [selectedDoc, setSelectedDoc] = useState<LegislationDoc | null>(null);
   const [articles, setArticles] = useState<ArticleNode[]>([]);
@@ -90,6 +92,18 @@ export default function LegislationPage() {
     finally { setReindexing(null); }
   };
 
+  const handleImportJsonl = async () => {
+    const file = jsonlInputRef.current?.files?.[0];
+    if (!file) return;
+    setImportingJsonl(true);
+    try {
+      await api.importLegislationJsonl(file);
+      if (jsonlInputRef.current) jsonlInputRef.current.value = "";
+      loadData();
+    } catch (e: any) { alert(e.message); }
+    finally { setImportingJsonl(false); }
+  };
+
   const handleSelectDoc = async (doc: LegislationDoc) => {
     setSelectedDoc(doc);
     setLoadingArticles(true);
@@ -120,9 +134,15 @@ export default function LegislationPage() {
             <h1 className="text-2xl font-bold text-gray-900 flex items-center gap-2"><Scale className="w-6 h-6 text-brand-600" />Законодательство</h1>
             <p className="text-sm text-gray-500 mt-1">Управление правовой базой для RAG-генерации представлений</p>
           </div>
-          <button onClick={() => setShowUpload(true)} className="flex items-center gap-1.5 px-4 py-2 bg-brand-600 text-white text-sm font-medium rounded-lg hover:bg-brand-700">
-            <Upload className="w-4 h-4" />Загрузить закон
-          </button>
+          <div className="flex items-center gap-2">
+            <input ref={jsonlInputRef} type="file" accept=".jsonl" className="hidden" onChange={handleImportJsonl} />
+            <button onClick={() => jsonlInputRef.current?.click()} disabled={importingJsonl} className="flex items-center gap-1.5 px-4 py-2 border border-brand-600 text-brand-600 text-sm font-medium rounded-lg hover:bg-brand-50 disabled:opacity-50">
+              {importingJsonl ? <Loader2 className="w-4 h-4 animate-spin" /> : <FileJson className="w-4 h-4" />}Импорт JSONL
+            </button>
+            <button onClick={() => setShowUpload(true)} className="flex items-center gap-1.5 px-4 py-2 bg-brand-600 text-white text-sm font-medium rounded-lg hover:bg-brand-700">
+              <Upload className="w-4 h-4" />Загрузить закон
+            </button>
+          </div>
         </div>
 
         {/* Search & filter */}

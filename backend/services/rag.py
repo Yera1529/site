@@ -627,6 +627,82 @@ class RAGService:
         except Exception:
             pass
 
+    def index_legislation_jsonl(self, doc_id: str, law_title: str, category: str,
+                                 records: list[dict]) -> int:
+        """Index enriched JSONL records into ChromaDB.
+
+        Each record becomes one chunk with enriched metadata:
+          - norm_type, violation_criteria, applicable_measures
+          - subject_competence (serialized as string)
+        """
+        col = self._get_legislation_collection()
+        if not records:
+            return 0
+
+        ids, docs, metas = [], [], []
+
+        for idx, rec in enumerate(records):
+            article_number = rec.get("article_number", "")
+            original_text = rec.get("original_text", "")
+            norm_type = rec.get("norm_type", "")
+            violation_criteria = rec.get("violation_criteria", "")
+            applicable_measures = rec.get("applicable_measures", "")
+
+            # Serialize complex fields
+            subj = rec.get("subject_competence", {})
+            if isinstance(subj, dict):
+                subj_str = f"{subj.get('organ', '')} — {subj.get('competence', '')}"
+            elif isinstance(subj, list):
+                subj_str = "; ".join(
+                    f"{s.get('organ', '')} — {s.get('competence', '')}" for s in subj if isinstance(s, dict)
+                )
+            else:
+                subj_str = str(subj)
+
+            if isinstance(applicable_measures, list):
+                applicable_measures = "; ".join(applicable_measures)
+
+            # Build rich chunk text for embedding
+            chunk_text = (
+                f"[{law_title}, {article_number}]\n"
+                f"Тип нормы: {norm_type}\n"
+                f"Текст: {original_text}\n"
+                f"Субъект/компетенция: {subj_str}\n"
+                f"Критерии нарушения: {violation_criteria}\n"
+                f"Меры реагирования: {applicable_measures}"
+            )
+
+            chunk_id = f"leg_{doc_id}_j{idx}"
+            meta = {
+                "doc_id": doc_id,
+                "law_title": law_title,
+                "article_number": article_number,
+                "point_number": "",
+                "article_title": article_number,
+                "category": category,
+                "full_article": chunk_text[:8000],
+                "chunk_type": "enriched_jsonl",
+                "norm_type": norm_type,
+                "violation_criteria": violation_criteria[:2000],
+                "applicable_measures": applicable_measures[:2000],
+            }
+
+            ids.append(chunk_id)
+            docs.append(chunk_text)
+            metas.append(meta)
+
+        BATCH = 500
+        for i in range(0, len(ids), BATCH):
+            col.upsert(
+                documents=docs[i:i + BATCH],
+                ids=ids[i:i + BATCH],
+                metadatas=metas[i:i + BATCH],
+            )
+
+        self._rebuild_bm25()
+        logger.info("JSONL indexed %s: %d chunks", law_title, len(ids))
+        return len(ids)
+
     def get_legislation_stats(self) -> dict:
         try:
             col = self._client.get_or_create_collection(name=LEGISLATION_COLLECTION)

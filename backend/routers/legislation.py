@@ -1,6 +1,8 @@
 """Legislation management routes: upload, list, search, reindex, article parsing."""
 
+import json
 import uuid
+from collections import defaultdict
 from datetime import datetime, timezone
 from typing import List, Optional
 from fastapi import APIRouter, Depends, HTTPException, UploadFile, File as FastAPIFile, Query
@@ -225,3 +227,127 @@ async def reindex_legislation(
     await db.flush()
     await db.refresh(doc)
     return _to_response(doc)
+
+
+@router.post("/import-jsonl", response_model=List[LegislationResponse], status_code=201)
+async def import_legislation_jsonl(
+    file: UploadFile = FastAPIFile(...),
+    category: str = Query("уголовное право"),
+    user: User = Depends(require_admin),
+    db: AsyncSession = Depends(get_db),
+):
+    """Import enriched legislation from a JSONL file.
+
+    Each line is a JSON object with: law_name, article_number, original_text,
+    norm_type, subject_competence, violation_criteria, applicable_measures.
+
+    Records are grouped by law_name → one LegislationDoc per law.
+    """
+    ext = file.filename.rsplit(".", 1)[-1].lower() if "." in file.filename else ""
+    if ext not in ("jsonl", "json"):
+        raise HTTPException(
+            status_code=400,
+            detail="Ожидается файл .jsonl или .json",
+        )
+
+    content_bytes = await file.read()
+    settings = get_settings()
+    if len(content_bytes) > settings.max_upload_bytes:
+        max_mb = settings.max_upload_bytes // (1024 * 1024)
+        raise HTTPException(status_code=413, detail=f"Файл превышает {max_mb} МБ.")
+
+    # Parse JSONL lines
+    text = content_bytes.decode("utf-8", errors="ignore")
+    records: list[dict] = []
+    for line_num, line in enumerate(text.splitlines(), 1):
+        line = line.strip()
+        if not line:
+            continue
+        try:
+            records.append(json.loads(line))
+        except json.JSONDecodeError:
+            raise HTTPException(
+                status_code=400,
+                detail=f"Ошибка JSON в строке {line_num}",
+            )
+
+    if not records:
+        raise HTTPException(status_code=400, detail="Файл не содержит записей.")
+
+    # Group by law_name
+    grouped: dict[str, list[dict]] = defaultdict(list)
+    for rec in records:
+        law_name = rec.get("law_name", "Без названия")
+        grouped[law_name].append(rec)
+
+    # Save file
+    storage = StorageService()
+    storage_path = storage.save_file("legislation", file.filename, content_bytes)
+
+    rag = RAGService()
+    created_docs: list[LegislationResponse] = []
+
+    for law_name, law_records in grouped.items():
+        doc_id = uuid.uuid4()
+
+        # Build human-readable content from enriched fields
+        content_parts = [f"# {law_name}\n"]
+        for rec in law_records:
+            art_num = rec.get("article_number", "")
+            original = rec.get("original_text", "")
+            norm_type = rec.get("norm_type", "")
+            violation = rec.get("violation_criteria", "")
+            measures = rec.get("applicable_measures", "")
+            if isinstance(measures, list):
+                measures = "; ".join(measures)
+            subj = rec.get("subject_competence", {})
+            if isinstance(subj, dict):
+                subj_str = f"{subj.get('organ', '')} — {subj.get('competence', '')}"
+            elif isinstance(subj, list):
+                subj_str = "; ".join(
+                    f"{s.get('organ', '')} — {s.get('competence', '')}"
+                    for s in subj if isinstance(s, dict)
+                )
+            else:
+                subj_str = str(subj)
+
+            content_parts.append(
+                f"## {art_num}\n"
+                f"**Тип нормы:** {norm_type}\n\n"
+                f"{original}\n\n"
+                f"**Субъект/компетенция:** {subj_str}\n\n"
+                f"**Критерии нарушения:** {violation}\n\n"
+                f"**Меры реагирования:** {measures}\n\n---\n"
+            )
+
+        content = "\n".join(content_parts)
+
+        # Index into ChromaDB
+        chunk_count = rag.index_legislation_jsonl(
+            doc_id=str(doc_id),
+            law_title=law_name,
+            category=category.strip(),
+            records=law_records,
+        )
+
+        doc = LegislationDoc(
+            id=doc_id,
+            title=law_name,
+            category=category.strip(),
+            year=None,
+            filename=file.filename,
+            storage_path=storage_path,
+            content=content,
+            article_count=len(law_records),
+            file_size=len(content_bytes),
+            file_type="jsonl",
+            chunk_count=chunk_count,
+            indexed_at=datetime.now(timezone.utc),
+            uploaded_by=user.id,
+        )
+        db.add(doc)
+        await db.flush()
+        await db.refresh(doc)
+        created_docs.append(_to_response(doc))
+
+    return created_docs

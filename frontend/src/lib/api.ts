@@ -320,6 +320,27 @@ export const api = {
   reindexLegislation: (id: string) =>
     request(`/api/legislation/${id}/reindex`, { method: "POST" }),
 
+  importLegislationJsonl: async (file: File) => {
+    const token = getToken();
+    const formData = new FormData();
+    formData.append("file", file);
+    let res: Response;
+    try {
+      res = await fetch(`${API_URL}/api/legislation/import-jsonl`, {
+        method: "POST",
+        headers: token ? { Authorization: `Bearer ${token}` } : {},
+        body: formData,
+      });
+    } catch (err: any) {
+      throw new Error(normalizeErrorMessage(err?.message || "Unknown error"));
+    }
+    if (!res.ok) {
+      const body = await res.json().catch(() => ({ detail: res.statusText }));
+      throw new Error(body.detail || `Ошибка импорта: ${res.status}`);
+    }
+    return res.json();
+  },
+
   // Search laws (for generation wizard)
   searchLaws: (matterId: string, query?: string) =>
     request("/api/search-laws", {
