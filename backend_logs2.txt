@@ -1,34 +1,3 @@
-backend-1  | INFO:     Will watch for changes in these directories: ['/app']
-backend-1  | INFO:     Uvicorn running on http://0.0.0.0:8000 (Press CTRL+C to quit)
-backend-1  | INFO:     Started reloader process [1] using WatchFiles
-backend-1  | INFO:     Started server process [8]
-backend-1  | INFO:     Waiting for application startup.
-backend-1  | INFO:     Application startup complete.
-backend-1  | Failed to send telemetry event ClientStartEvent: capture() takes 1 positional argument but 3 were given
-backend-1  | INFO:     172.19.0.1:48052 - "GET /api/auth/me HTTP/1.1" 200 OK
-backend-1  | INFO:     172.19.0.1:48052 - "GET /api/legislation HTTP/1.1" 200 OK
-backend-1  | INFO:     172.19.0.1:48062 - "GET /api/legislation/categories HTTP/1.1" 200 OK
-backend-1  | INFO:     172.19.0.1:32920 - "OPTIONS /api/legislation/import-jsonl HTTP/1.1" 200 OK
-backend-1  | Failed to send telemetry event ClientCreateCollectionEvent: capture() takes 1 positional argument but 3 were given
-backend-1  | Failed to send telemetry event ClientCreateCollectionEvent: capture() takes 1 positional argument but 3 were given
-backend-1  | Failed to send telemetry event CollectionGetEvent: capture() takes 1 positional argument but 3 were given
-backend-1  | Failed to send telemetry event ClientCreateCollectionEvent: capture() takes 1 positional argument but 3 were given
-backend-1  | Failed to send telemetry event ClientCreateCollectionEvent: capture() takes 1 positional argument but 3 were given
-backend-1  | Failed to send telemetry event ClientCreateCollectionEvent: capture() takes 1 positional argument but 3 were given
-backend-1  | Failed to send telemetry event ClientCreateCollectionEvent: capture() takes 1 positional argument but 3 were given
-backend-1  | Failed to send telemetry event ClientCreateCollectionEvent: capture() takes 1 positional argument but 3 were given
-backend-1  | Failed to send telemetry event ClientCreateCollectionEvent: capture() takes 1 positional argument but 3 were given
-backend-1  | Failed to send telemetry event ClientCreateCollectionEvent: capture() takes 1 positional argument but 3 were given
-backend-1  | INFO:     172.19.0.1:32920 - "POST /api/legislation/import-jsonl HTTP/1.1" 500 Internal Server Error
-backend-1  | ERROR:    Exception in ASGI application
-backend-1  | Traceback (most recent call last):
-backend-1  |   File "/usr/local/lib/python3.12/site-packages/uvicorn/protocols/http/httptools_impl.py", line 409, in run_asgi
-backend-1  |     result = await app(  # type: ignore[func-returns-value]
-backend-1  |              ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-backend-1  |   File "/usr/local/lib/python3.12/site-packages/uvicorn/middleware/proxy_headers.py", line 60, in __call__
-backend-1  |     return await self.app(scope, receive, send)
-backend-1  |            ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-backend-1  |   File "/usr/local/lib/python3.12/site-packages/fastapi/applications.py", line 1054, in __call__
 backend-1  |     await super().__call__(scope, receive, send)
 backend-1  |   File "/usr/local/lib/python3.12/site-packages/starlette/applications.py", line 113, in __call__
 backend-1  |     await self.middleware_stack(scope, receive, send)
@@ -70,7 +39,22 @@ backend-1  |            ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
 backend-1  |   File "/app/routers/legislation.py", line 326, in import_legislation_jsonl
 backend-1  |     chunk_count = rag.index_legislation_jsonl(
 backend-1  |                   ^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-backend-1  |   File "/app/services/rag.py", line 686, in index_legislation_jsonl
-backend-1  |     "violation_criteria": violation_criteria[:2000],
-backend-1  |                           ~~~~~~~~~~~~~~~~~~^^^^^^^
-backend-1  | TypeError: 'NoneType' object is not subscriptable
+backend-1  |   File "/app/services/rag.py", line 696, in index_legislation_jsonl
+backend-1  |     col.upsert(
+backend-1  |   File "/usr/local/lib/python3.12/site-packages/chromadb/api/models/Collection.py", line 334, in upsert
+backend-1  |     upsert_request = self._validate_and_prepare_upsert_request(
+backend-1  |                      ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+backend-1  |   File "/usr/local/lib/python3.12/site-packages/chromadb/api/models/CollectionCommon.py", line 93, in wrapper
+backend-1  |     raise type(e)(msg).with_traceback(e.__traceback__)
+backend-1  |   File "/usr/local/lib/python3.12/site-packages/chromadb/api/models/CollectionCommon.py", line 90, in wrapper
+backend-1  |     return func(self, *args, **kwargs)
+backend-1  |            ^^^^^^^^^^^^^^^^^^^^^^^^^^^
+backend-1  |   File "/usr/local/lib/python3.12/site-packages/chromadb/api/models/CollectionCommon.py", line 399, in _validate_and_prepare_upsert_request
+backend-1  |     validate_insert_record_set(record_set=upsert_records)
+backend-1  |   File "/usr/local/lib/python3.12/site-packages/chromadb/api/types.py", line 230, in validate_insert_record_set
+backend-1  |     validate_metadatas(record_set["metadatas"])
+backend-1  |   File "/usr/local/lib/python3.12/site-packages/chromadb/api/types.py", line 592, in validate_metadatas
+backend-1  |     validate_metadata(metadata)
+backend-1  |   File "/usr/local/lib/python3.12/site-packages/chromadb/api/types.py", line 558, in validate_metadata
+backend-1  |     raise ValueError(
+backend-1  | ValueError: Expected metadata value to be a str, int, float or bool, got ['Невынесение компетентным органом заявления на рассмотрение экспертной комиссии в установленный срок.', 'Нерассмотрение экспертной комиссией заявления в установленный срок или ненаправление рекомендаций.'] which is a list in upsert.

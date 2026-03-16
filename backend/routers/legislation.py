@@ -292,15 +292,22 @@ async def import_legislation_jsonl(
 
         # Build human-readable content from enriched fields
         content_parts = [f"# {law_name}\n"]
+        def _s(val):
+            if val is None:
+                return ""
+            if isinstance(val, list):
+                return "; ".join(str(v) for v in val)
+            if isinstance(val, dict):
+                return "; ".join(f"{k}: {v}" for k, v in val.items())
+            return str(val)
+
         for rec in law_records:
-            art_num = rec.get("article_number") or ""
-            original = rec.get("original_text") or ""
-            norm_type = rec.get("norm_type") or ""
-            violation = rec.get("violation_criteria") or ""
-            measures = rec.get("applicable_measures") or ""
-            if isinstance(measures, list):
-                measures = "; ".join(str(m) for m in measures)
-            subj = rec.get("subject_competence") or {}
+            art_num = _s(rec.get("article_number"))
+            original = _s(rec.get("original_text"))
+            norm_type = _s(rec.get("norm_type"))
+            violation = _s(rec.get("violation_criteria"))
+            measures = _s(rec.get("applicable_measures"))
+            subj = rec.get("subject_competence")
             if isinstance(subj, dict):
                 subj_str = f"{subj.get('organ', '')} — {subj.get('competence', '')}"
             elif isinstance(subj, list):
@@ -309,7 +316,7 @@ async def import_legislation_jsonl(
                     for s in subj if isinstance(s, dict)
                 )
             else:
-                subj_str = str(subj)
+                subj_str = _s(subj)
 
             content_parts.append(
                 f"## {art_num}\n"

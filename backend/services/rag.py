@@ -641,15 +641,25 @@ class RAGService:
 
         ids, docs, metas = [], [], []
 
+        def _s(val) -> str:
+            """Coerce any value to a plain string for ChromaDB metadata."""
+            if val is None:
+                return ""
+            if isinstance(val, list):
+                return "; ".join(str(v) for v in val)
+            if isinstance(val, dict):
+                return "; ".join(f"{k}: {v}" for k, v in val.items())
+            return str(val)
+
         for idx, rec in enumerate(records):
-            article_number = rec.get("article_number") or ""
-            original_text = rec.get("original_text") or ""
-            norm_type = rec.get("norm_type") or ""
-            violation_criteria = rec.get("violation_criteria") or ""
-            applicable_measures = rec.get("applicable_measures") or ""
+            article_number = _s(rec.get("article_number"))
+            original_text = _s(rec.get("original_text"))
+            norm_type = _s(rec.get("norm_type"))
+            violation_criteria = _s(rec.get("violation_criteria"))
+            applicable_measures = _s(rec.get("applicable_measures"))
 
             # Serialize complex fields
-            subj = rec.get("subject_competence", {})
+            subj = rec.get("subject_competence")
             if isinstance(subj, dict):
                 subj_str = f"{subj.get('organ', '')} — {subj.get('competence', '')}"
             elif isinstance(subj, list):
@@ -657,10 +667,7 @@ class RAGService:
                     f"{s.get('organ', '')} — {s.get('competence', '')}" for s in subj if isinstance(s, dict)
                 )
             else:
-                subj_str = str(subj)
-
-            if isinstance(applicable_measures, list):
-                applicable_measures = "; ".join(applicable_measures)
+                subj_str = _s(subj)
 
             # Build rich chunk text for embedding
             chunk_text = (
