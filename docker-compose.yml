@@ -27,7 +27,7 @@ services:
     environment:
       DATABASE_URL: postgresql+asyncpg://postgres:postgres@db:5432/legalassist
       SECRET_KEY: change-me-to-a-random-secret-key-in-production
-      AI_API_KEY: "AIzaSyCKOLTT5vkrunmiydIIGRLNp9pX37aaAHM"
+      AI_API_KEY: "AIzaSyAshlb4ABfpCG28RLV_ZuFtf8qqqToMebQ"
       AI_MODEL: gemini-2.5-flash
       EMBEDDING_MODEL: intfloat/multilingual-e5-base
       STORAGE_DIR: /app/storage
