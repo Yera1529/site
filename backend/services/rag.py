@@ -27,23 +27,53 @@ KB_COLLECTION = "knowledge_base_art200"
 LEGISLATION_COLLECTION = "legislation_v2"
 
 LEGAL_SYNONYMS = {
-    "убийство": "причинение смерти лишение жизни умышленное причинение смерти",
+    # Преступления против жизни и здоровья
+    "убийство": "причинение смерти лишение жизни умышленное причинение смерти летальный исход",
+    "побои": "причинение вреда здоровью телесные повреждения физическое насилие",
+    "истязани": "систематические побои мучения физическое насилие",
+    # Преступления против собственности
     "кража": "хищение тайное хищение чужого имущества тайное завладение",
+    "грабёж": "открытое хищение чужого имущества завладение имуществом",
+    "разбой": "нападение в целях хищения чужого имущества",
     "мошенничество": "обман злоупотребление доверием завладение путём обмана",
+    "присвоени": "растрата вверенного имущества хищение вверенного",
+    "вымогательств": "требование передачи имущества угроза",
+    # Общественный порядок
     "хулиганство": "грубое нарушение общественного порядка хулиганские побуждения",
+    # Наркотики и вещества
     "наркотик": "наркотическое средство психотропное вещество оборот наркотиков",
     "алкоголь": "спиртные напитки опьянение нетрезвое состояние",
+    # Оружие
     "нож": "холодное оружие колюще-режущее орудие преступления",
-    "оружие": "огнестрельное оружие боеприпасы незаконное хранение",
-    "побои": "причинение вреда здоровью телесные повреждения",
-    "пожар": "возгорание противопожарная безопасность пожарная безопасность",
-    "дтп": "дорожно-транспортное происшествие авария наезд нарушение ПДД",
-    "несовершеннолетн": "малолетний ребёнок подросток",
-    "должностн": "государственный служащий служебное положение",
+    "оружие": "огнестрельное оружие боеприпасы незаконное хранение вооружение",
+    # Транспорт и дороги
+    "пожар": "возгорание противопожарная безопасность пожарная безопасность огонь",
+    "дтп": "дорожно-транспортное происшествие авария наезд нарушение ПДД дорожное движение",
+    # Несовершеннолетние
+    "несовершеннолетн": "малолетний ребёнок подросток дети опека",
+    # Должностные
+    "должностн": "государственный служащий служебное положение госслужащий",
     "взятк": "коррупция получение взятки дача взятки подкуп",
-    "халатност": "ненадлежащее исполнение обязанностей бездействие",
-    "безопасност": "охрана труда техника безопасности",
+    "халатност": "ненадлежащее исполнение обязанностей бездействие служебная халатность",
+    # Безопасность и охрана труда
+    "безопасност": "охрана труда техника безопасности условия труда производственная безопасность",
     "надзор": "контроль проверка инспекция государственный надзор",
+    # Экология
+    "экологи": "окружающая среда загрязнение природопользование экологические требования",
+    "загрязнен": "вредные выбросы экология окружающая среда природоохрана",
+    # Финансы
+    "хищение бюджет": "нецелевое использование бюджетных средств растрата государственных средств",
+    "подделк": "поддельный документ фальсификация подлог",
+    "фальсификац": "подделка подлог фиктивный документ",
+    # Торговля и предпринимательство
+    "торговл": "предпринимательская деятельность торговый объект розничная торговля",
+    "лицензи": "разрешение лицензирование разрешительный документ",
+    # Строительство
+    "строительств": "строительные работы строительная площадка строительный объект",
+    "обрушени": "аварийное состояние обрушение конструкции разрушение здания",
+    # Медицина
+    "врачебн": "медицинская помощь медицинская деятельность лечение",
+    "лекарств": "медицинские препараты фармацевтическая деятельность",
 }
 
 
@@ -445,10 +475,19 @@ class RAGService:
         return len(ids)
 
     def search_relevant_laws(self, query: str, top_k: int = 10,
-                             categories: list[str] | None = None) -> list[dict]:
-        """Hybrid retrieval: semantic + BM25 + RRF + cross-encoder rerank.
+                             categories: list[str] | None = None,
+                             semantic_weight: float = 0.6,
+                             bm25_weight: float = 0.4) -> list[dict]:
+        """Hybrid retrieval: semantic + BM25 + weighted RRF + cross-encoder rerank.
 
         Returns full article text via parent-document retrieval.
+
+        Args:
+            query: Search query / case description
+            top_k: Number of results to return
+            categories: Optional category filter
+            semantic_weight: Weight for semantic score in RRF (default 0.6)
+            bm25_weight: Weight for BM25 score in RRF (default 0.4)
         """
         try:
             col = self._get_legislation_collection()
@@ -459,12 +498,12 @@ class RAGService:
             expanded = self._expand_query(query)
             queries = [query] + ([expanded] if expanded != query else [])
 
-            # ── Stage 1: Semantic retrieval ────────────────────────────
-            fetch_k = min(30, col.count())
+            # ── Stage 1: Semantic retrieval (multi-query) ──────────────
+            fetch_k = min(40, col.count())  # Increased candidate pool
             seen: set[str] = set()
             candidates: list[dict] = []
 
-            for q in queries:
+            for q_idx, q in enumerate(queries):
                 q_emb = self._embed_fn.encode_queries([q])
                 kw = {"query_embeddings": q_emb, "n_results": fetch_k}
                 if where:
@@ -478,25 +517,36 @@ class RAGService:
                     res["metadatas"][0], res["distances"][0]
                 ):
                     if cid in seen:
+                        # If already seen, keep best score
+                        existing = next((c for c in candidates if c["id"] == cid), None)
+                        if existing:
+                            new_score = max(0, round(1.0 - dist, 4))
+                            existing["score"] = max(existing["score"], new_score)
                         continue
                     seen.add(cid)
                     score = max(0, round(1.0 - dist, 4))
                     candidates.append({
                         "id": cid, "text": doc, "score": score,
                         "bm25_rank": float("inf"), "bi_rank": 0,
+                        "query_match": q_idx,  # Track which query matched
                         **{k: meta.get(k, "") for k in
                            ("law_title", "article_number", "article_title",
-                            "category", "full_article")},
+                            "category", "full_article", "chunk_type")},
                     })
 
-            # ── Stage 2: BM25 lexical retrieval ────────────────────────
+            # ── Stage 2: BM25 lexical retrieval (expanded tokens) ──────
             bm25 = self._bm25.get("model")
             bm25_corpus = self._bm25.get("corpus", [])
             bm25_meta = self._bm25.get("meta", [])
 
             if bm25 and bm25_corpus:
-                tokens = query.lower().split()
-                scores = bm25.get_scores(tokens)
+                # Tokenize both original and expanded queries
+                tokens_original = query.lower().split()
+                tokens_expanded = expanded.lower().split() if expanded != query else []
+                # Merge unique tokens, original first for priority
+                all_tokens = list(dict.fromkeys(tokens_original + tokens_expanded))
+
+                scores = bm25.get_scores(all_tokens)
                 ranked = sorted(enumerate(scores), key=lambda x: x[1], reverse=True)[:fetch_k]
 
                 for rank, (idx, sc) in enumerate(ranked, 1):
@@ -509,26 +559,29 @@ class RAGService:
                     doc = bm25_corpus[idx]
                     existing = next((c for c in candidates if c["text"] == doc), None)
                     if existing:
-                        existing["bm25_rank"] = rank
+                        existing["bm25_rank"] = min(existing["bm25_rank"], rank)
                     else:
                         candidates.append({
                             "id": f"bm25_{idx}", "text": doc, "score": 0.0,
                             "bm25_rank": rank, "bi_rank": float("inf"),
+                            "query_match": -1,
                             **{k: meta.get(k, "") for k in
                                ("law_title", "article_number", "article_title",
                                 "category", "full_article")},
                         })
 
-            # ── Stage 3: Reciprocal Rank Fusion ────────────────────────
+            # ── Stage 3: Weighted Reciprocal Rank Fusion ───────────────
             candidates.sort(key=lambda x: x["score"], reverse=True)
             for r, c in enumerate(candidates, 1):
                 c["bi_rank"] = r if c["score"] > 0 else float("inf")
 
             K = 60
             for c in candidates:
-                s1 = 1.0 / (K + c["bi_rank"]) if c["bi_rank"] != float("inf") else 0
-                s2 = 1.0 / (K + c["bm25_rank"]) if c["bm25_rank"] != float("inf") else 0
-                c["rrf"] = s1 + s2
+                s1 = semantic_weight / (K + c["bi_rank"]) if c["bi_rank"] != float("inf") else 0
+                s2 = bm25_weight / (K + c["bm25_rank"]) if c["bm25_rank"] != float("inf") else 0
+                # Bonus for candidates found by both methods
+                fusion_bonus = 0.005 if (s1 > 0 and s2 > 0) else 0
+                c["rrf"] = s1 + s2 + fusion_bonus
 
             candidates.sort(key=lambda x: x["rrf"], reverse=True)
             candidates = candidates[:fetch_k]
@@ -536,7 +589,8 @@ class RAGService:
             # ── Stage 4: Cross-encoder reranking ───────────────────────
             self._ensure_reranker()
             if self._reranker and candidates:
-                pairs = [[query, c["text"][:512]] for c in candidates]
+                # Use longer context for cross-encoder (768 vs 512)
+                pairs = [[query, c["text"][:768]] for c in candidates]
                 try:
                     re_scores = self._reranker.predict(pairs)
                     for c, s in zip(candidates, re_scores):
@@ -550,23 +604,37 @@ class RAGService:
 
             candidates.sort(key=lambda x: x["final_score"], reverse=True)
 
-            # ── Parent-document dedup: prefer full_article over point ──
-            seen_arts: set[str] = set()
-            results: list[dict] = []
+            # ── Parent-document dedup with score-aware merging ─────────
+            # When multiple points from the same article match, keep the best
+            # but boost the final score slightly (article-level relevance signal)
+            seen_arts: dict[str, dict] = {}  # art_key -> best candidate
             for c in candidates:
                 art_key = f"{c['law_title']}::{c['article_number']}"
                 if art_key in seen_arts:
+                    existing = seen_arts[art_key]
+                    # Boost existing score when multiple points match
+                    # This signals the article is broadly relevant
+                    existing["final_score"] = existing["final_score"] + 0.01
+                    # Keep the better full_article text
+                    if len(c.get("full_article", "")) > len(existing.get("full_article", "")):
+                        existing["full_article"] = c["full_article"]
                     continue
-                seen_arts.add(art_key)
+                seen_arts[art_key] = c
 
+            # Sort merged results by final score
+            deduped = sorted(seen_arts.values(), key=lambda x: x["final_score"], reverse=True)
+
+            results: list[dict] = []
+            for c in deduped:
                 text = c.get("full_article") or c["text"]
-                text = text[:4000]
+                text = text[:5000]  # Increased from 4000 for better context
 
                 results.append({
                     "text": text,
                     "law_title": c["law_title"],
                     "article_number": c["article_number"],
-                    "category": c["category"],
+                    "article_title": c.get("article_title", ""),
+                    "category": c.get("category", ""),
                     "score": c["final_score"],
                 })
                 if len(results) >= top_k:
@@ -613,8 +681,29 @@ class RAGService:
 
     @staticmethod
     def _expand_query(query: str) -> str:
+        """Expand query with legal synonyms and extracted key terms.
+
+        Enhanced strategy:
+          1. Match synonym keys in the query
+          2. Extract article numbers mentioned in the query
+          3. Add context about legal obligations
+        """
         lower = query.lower()
         adds = [exp for key, exp in LEGAL_SYNONYMS.items() if key in lower]
+
+        # Extract article references to boost precision
+        article_refs = re.findall(r'ст(?:атья|\.)?\s*(\d+)', lower)
+        if article_refs:
+            adds.append("статья " + " статья ".join(article_refs))
+
+        # Add obligation context if case-related terms detected
+        obligation_triggers = [
+            "нарушени", "бездействи", "не обеспечи", "не выполни",
+            "ненадлежащ", "необеспечен", "причин", "условия",
+        ]
+        if any(t in lower for t in obligation_triggers):
+            adds.append("обязанность обеспечить устранение нарушений меры")
+
         return query + " " + " ".join(adds) if adds else query
 
     def delete_legislation(self, doc_id: str) -> None:
@@ -723,12 +812,24 @@ class RAGService:
 
     @staticmethod
     def _sentence_chunk(text: str, max_words: int = 400, overlap_words: int = 80) -> list[str]:
-        """Split text at sentence boundaries, respecting max chunk size."""
+        """Split text at sentence boundaries, respecting max chunk size.
+
+        Enhanced for Russian legal text:
+          - Handles numbered points (1. 2. 3.) without splitting mid-point
+          - Recognizes article references (ст. 22) as non-sentence-end
+          - Preserves paragraph structure
+        """
         text = re.sub(r"[ \t]+", " ", text).strip()
         if not text:
             return []
 
-        sentences = re.split(r"(?<=[.!?;])\s+(?=[А-ЯA-Z0-9«\"])", text)
+        # Enhanced sentence splitting for Russian legal text:
+        # - Split at .!?; followed by uppercase letter, digit, or quote
+        # - But NOT after abbreviations like ст., п., пп., ч., г., т.д., т.п., др.
+        # - Not after single-digit numbered points (handled separately)
+        abbrev_pattern = r'(?<!ст)(?<!пп)(?<!ч\.)(?<!г\.)(?<!д\.)(?<!т\.)(?<!др)(?<!им)(?<!гр)(?<!РК)(?<!УК)(?<!РФ)'
+        split_pattern = abbrev_pattern + r'(?<=[.!?;])\s+(?=[А-ЯA-Z0-9«\"])'
+        sentences = re.split(split_pattern, text)
         if not sentences:
             return [text]
 
@@ -737,9 +838,20 @@ class RAGService:
         current_len = 0
 
         for sent in sentences:
+            sent = sent.strip()
+            if not sent:
+                continue
             sent_len = len(sent.split())
+
+            # Don't create tiny chunks — merge short sentences with next
+            if sent_len < 3 and current:
+                current[-1] = current[-1] + " " + sent
+                current_len += sent_len
+                continue
+
             if current_len + sent_len > max_words and current:
                 chunks.append(" ".join(current))
+                # Overlap: keep last N words worth of sentences for context
                 overlap_sents = []
                 overlap_len = 0
                 for s in reversed(current):
@@ -755,7 +867,12 @@ class RAGService:
             current_len += sent_len
 
         if current:
-            chunks.append(" ".join(current))
+            last_chunk = " ".join(current)
+            # If last chunk is very short, merge with previous
+            if chunks and len(last_chunk.split()) < 15:
+                chunks[-1] = chunks[-1] + " " + last_chunk
+            else:
+                chunks.append(last_chunk)
 
         return [c for c in chunks if len(c.split()) > 5]
 

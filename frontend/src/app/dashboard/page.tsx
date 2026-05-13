@@ -2,13 +2,12 @@
 
 import { useState, useEffect } from "react";
 import { useRouter } from "next/navigation";
-import { useAuth } from "@/lib/auth";
 import { api } from "@/lib/api";
 import Navbar from "@/components/Navbar";
 import { MatterListItem } from "@/types";
 import {
   Plus,
-  Briefcase,
+  FolderOpen,
   FileText,
   Calendar,
   ChevronRight,
@@ -18,7 +17,6 @@ import {
 } from "lucide-react";
 
 export default function DashboardPage() {
-  const { user, loading: authLoading } = useAuth();
   const router = useRouter();
   const [matters, setMatters] = useState<MatterListItem[]>([]);
   const [loading, setLoading] = useState(true);
@@ -28,24 +26,17 @@ export default function DashboardPage() {
   const [newDesc, setNewDesc] = useState("");
   const [creating, setCreating] = useState(false);
 
-  useEffect(() => {
-    if (!authLoading && !user) router.replace("/login");
-  }, [user, authLoading, router]);
-
   const loadMatters = () => {
-    if (user) {
-      api
-        .listMatters()
-        .then((data) => setMatters(data as MatterListItem[]))
-        .catch(console.error)
-        .finally(() => setLoading(false));
-    }
+    api
+      .listMatters()
+      .then((data) => setMatters(data as MatterListItem[]))
+      .catch(console.error)
+      .finally(() => setLoading(false));
   };
 
   useEffect(() => {
     loadMatters();
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [user]);
+  }, []);
 
   const handleCreate = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -78,13 +69,7 @@ export default function DashboardPage() {
       m.description?.toLowerCase().includes(search.toLowerCase())
   );
 
-  if (authLoading || !user) {
-    return (
-      <div className="min-h-screen flex items-center justify-center">
-        <Loader2 className="w-8 h-8 animate-spin text-brand-600" />
-      </div>
-    );
-  }
+
 
   return (
     <div className="min-h-screen bg-gray-50">
@@ -92,11 +77,16 @@ export default function DashboardPage() {
 
       <main className="max-w-6xl mx-auto px-6 py-8">
         <div className="flex items-center justify-between mb-8">
-          <div>
-            <h1 className="text-2xl font-bold text-gray-900">Уголовные дела</h1>
-            <p className="text-sm text-gray-500 mt-1">
-              Управление уголовными делами и документами
-            </p>
+          <div className="flex items-center gap-3">
+            <div className="w-10 h-10 rounded-xl bg-brand-600 flex items-center justify-center">
+              <FolderOpen className="w-5 h-5 text-white" />
+            </div>
+            <div>
+              <h1 className="text-2xl font-bold text-gray-900">Уголовные дела</h1>
+              <p className="text-sm text-gray-500 mt-0.5">
+                Управление уголовными делами и документами
+              </p>
+            </div>
           </div>
           <button
             onClick={() => setShowCreate(true)}
@@ -182,27 +172,48 @@ export default function DashboardPage() {
             <Loader2 className="w-6 h-6 animate-spin text-brand-600" />
           </div>
         ) : filtered.length === 0 ? (
-          <div className="text-center py-20">
-            <Briefcase className="w-12 h-12 mx-auto text-gray-300 mb-3" />
-            <p className="text-gray-500 font-medium">
-              {search ? "Дела не найдены" : "Пока нет уголовных дел"}
-            </p>
-            <p className="text-sm text-gray-400 mt-1">
-              {!search && "Зарегистрируйте первое дело, чтобы начать работу"}
-            </p>
-          </div>
+          <div className="text-center py-16 animate-fade-in-up">
+              <div className="relative inline-flex items-center justify-center w-24 h-24 mb-6">
+                <div className="absolute inset-0 bg-brand-100 rounded-3xl rotate-6" />
+                <div className="absolute inset-0 bg-brand-50 rounded-3xl -rotate-3" />
+                <div className="relative w-full h-full bg-white rounded-3xl border border-brand-100 flex items-center justify-center shadow-lg">
+                  <FolderOpen className="w-10 h-10 text-brand-400" />
+                </div>
+              </div>
+              <h3 className="text-xl font-bold text-gray-900 mb-2">
+                {search ? "Ничего не найдено" : "Нет уголовных дел"}
+              </h3>
+              <p className="text-gray-500 text-sm max-w-sm mx-auto mb-6">
+                {search
+                  ? "Попробуйте изменить поисковый запрос"
+                  : "Зарегистрируйте первое уголовное дело, чтобы начать работу с системой"}
+              </p>
+              {!search && (
+                <button
+                  onClick={() => setShowCreate(true)}
+                  className="inline-flex items-center gap-2 px-6 py-3 bg-brand-600 text-white text-sm
+                    font-semibold rounded-xl hover:bg-brand-700 transition-all hover:shadow-lg hover:-translate-y-0.5"
+                >
+                  <Plus className="w-4 h-4" />
+                  Создать первое дело
+                </button>
+              )}
+            </div>
         ) : (
           <div className="grid md:grid-cols-2 lg:grid-cols-3 gap-4">
             {filtered.map((matter) => (
-              <button
+              <div
                 key={matter.id}
                 onClick={() => router.push(`/matters/${matter.id}`)}
-                className="bg-white rounded-xl border border-gray-200 p-5 text-left
+                role="button"
+                tabIndex={0}
+                onKeyDown={(e) => { if (e.key === 'Enter') router.push(`/matters/${matter.id}`); }}
+                className="bg-white rounded-xl border border-gray-200 p-5 text-left cursor-pointer
                   hover:border-brand-300 hover:shadow-md transition-all group relative"
               >
                 <div className="flex items-start justify-between mb-3">
                   <div className="w-10 h-10 rounded-lg bg-brand-50 flex items-center justify-center">
-                    <Briefcase className="w-5 h-5 text-brand-600" />
+                    <FolderOpen className="w-5 h-5 text-brand-600" />
                   </div>
                   <div className="flex items-center gap-1">
                     <button
@@ -229,7 +240,7 @@ export default function DashboardPage() {
                     {new Date(matter.created_at).toLocaleDateString("ru-RU")}
                   </span>
                 </div>
-              </button>
+              </div>
             ))}
           </div>
         )}

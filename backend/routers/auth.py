@@ -19,8 +19,14 @@ from schemas.user import UserCreate, UserLogin, UserResponse, Token, PasswordRes
 
 router = APIRouter(prefix="/api/auth", tags=["auth"])
 pwd_context = CryptContext(schemes=["bcrypt"], deprecated="auto")
-security = HTTPBearer()
+security = HTTPBearer(auto_error=False)  # auto_error=False so DEV bypass works without token
 settings = get_settings()
+
+# ── DEV-MODE: bypass authentication ──
+# Set to True to skip JWT validation and use a fake admin user
+DEV_BYPASS = True
+_DEV_EMAIL = "admin@dev.local"
+_DEV_NAME = "Разработчик (Тест)"
 
 BCRYPT_MAX_BYTES = 72
 
@@ -48,11 +54,35 @@ def create_access_token(data: dict, expires_delta: Optional[timedelta] = None) -
     return jwt.encode(to_encode, settings.secret_key, algorithm="HS256")
 
 
+async def _get_or_create_dev_user(db: AsyncSession) -> User:
+    """Get or create the dev bypass admin user."""
+    result = await db.execute(select(User).where(User.email == _DEV_EMAIL))
+    user = result.scalar_one_or_none()
+    if user is None:
+        user = User(
+            email=_DEV_EMAIL,
+            full_name=_DEV_NAME,
+            hashed_password=hash_password("devpass123"),
+            role="admin",
+        )
+        db.add(user)
+        await db.flush()
+        await db.refresh(user)
+    return user
+
+
 async def get_current_user(
-    credentials: HTTPAuthorizationCredentials = Depends(security),
+    credentials: Optional[HTTPAuthorizationCredentials] = Depends(security),
     db: AsyncSession = Depends(get_db),
 ) -> User:
     """Dependency that extracts and validates the current user from the JWT."""
+    # DEV bypass — return fake admin without JWT check
+    if DEV_BYPASS:
+        return await _get_or_create_dev_user(db)
+
+    if credentials is None:
+        raise HTTPException(status_code=401, detail="Не предоставлен токен авторизации")
+
     token = credentials.credentials
     try:
         payload = jwt.decode(token, settings.secret_key, algorithms=["HS256"])

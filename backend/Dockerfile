@@ -22,7 +22,7 @@ RUN pip install --no-cache-dir -r requirements.txt
 COPY . .
 
 # Create storage directories
-RUN mkdir -p storage/uploads storage/generated storage/chroma_db
+RUN mkdir -p storage/uploads storage/generated storage/chroma_db storage/faiss_laws
 
 EXPOSE 8000
 

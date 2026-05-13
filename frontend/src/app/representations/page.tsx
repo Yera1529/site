@@ -2,12 +2,11 @@
 
 import { useState, useEffect } from "react";
 import { useRouter } from "next/navigation";
-import { useAuth } from "@/lib/auth";
 import { api } from "@/lib/api";
 import Navbar from "@/components/Navbar";
 import { RepresentationItem } from "@/types";
 import {
-  Loader2, FileCheck, Trash2, ExternalLink, ChevronDown, Filter,
+  Loader2, FileSignature, Trash2, ExternalLink, ChevronDown, Filter,
   FileText, Clock, CheckCircle2, Send, PenLine,
 } from "lucide-react";
 
@@ -24,16 +23,11 @@ const STATUS_ICONS: Record<string, React.ElementType> = {
 };
 
 export default function RepresentationsPage() {
-  const { user, loading: authLoading } = useAuth();
   const router = useRouter();
 
   const [reps, setReps] = useState<RepresentationItem[]>([]);
   const [loading, setLoading] = useState(true);
   const [filterStatus, setFilterStatus] = useState("");
-
-  useEffect(() => {
-    if (!authLoading && !user) router.replace("/login");
-  }, [user, authLoading, router]);
 
   const loadData = async () => {
     try {
@@ -43,7 +37,7 @@ export default function RepresentationsPage() {
     finally { setLoading(false); }
   };
 
-  useEffect(() => { if (user) loadData(); }, [user, filterStatus]);
+  useEffect(() => { loadData(); }, [filterStatus]);
 
   const handleDelete = async (id: string, title: string) => {
     if (!confirm(`Удалить представление «${title}»?`)) return;
@@ -61,27 +55,25 @@ export default function RepresentationsPage() {
       hour: "2-digit", minute: "2-digit",
     });
 
-  if (authLoading || !user) {
-    return (
-      <div className="min-h-screen flex items-center justify-center">
-        <Loader2 className="w-8 h-8 animate-spin text-brand-600" />
-      </div>
-    );
-  }
+
 
   return (
     <div className="min-h-screen bg-gray-50">
       <Navbar />
       <div className="max-w-5xl mx-auto px-6 py-8">
         <div className="flex items-center justify-between mb-6">
-          <div>
-            <h1 className="text-2xl font-bold text-gray-900 flex items-center gap-2">
-              <FileCheck className="w-6 h-6 text-brand-600" />
-              Представления
-            </h1>
-            <p className="text-sm text-gray-500 mt-1">
-              Все сгенерированные представления по ст.200 УПК РК
-            </p>
+          <div className="flex items-center gap-3">
+            <div className="w-10 h-10 rounded-xl bg-brand-600 flex items-center justify-center">
+              <FileSignature className="w-5 h-5 text-white" />
+            </div>
+            <div>
+              <h1 className="text-2xl font-bold text-gray-900">
+                Представления
+              </h1>
+              <p className="text-sm text-gray-500 mt-0.5">
+                Все сгенерированные представления по ст.200 УПК Республики Казахстан
+              </p>
+            </div>
           </div>
           <div className="relative">
             <Filter className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-gray-400" />

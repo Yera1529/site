@@ -10,8 +10,13 @@ class Settings(BaseSettings):
     access_token_expire_minutes: int = 1440
 
     ai_api_key: str = ""
-    ai_model: str = "gemini-2.5-pro-exp-03-25"
+    ai_model: str = "gemini-2.5-flash"
     embedding_model: str = "intfloat/multilingual-e5-base"
+
+    # Vertex AI settings (used when ai_api_key is empty)
+    vertex_ai_project: str = ""
+    vertex_ai_location: str = "us-central1"
+    google_application_credentials: str = ""
 
     storage_dir: str = "./storage"
     max_upload_bytes: int = 50 * 1024 * 1024  # 50 MB
@@ -19,6 +24,7 @@ class Settings(BaseSettings):
 
     class Config:
         env_file = ".env"
+        extra = "ignore"
 
 
 @lru_cache()

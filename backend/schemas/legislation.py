@@ -39,6 +39,9 @@ class RetrievedLaw(BaseModel):
     article_number: str
     category: str
     score: float
+    norm_purpose: Optional[str] = None
+    violation_criteria: Optional[str] = None
+    applicable_measures: Optional[str] = None
 
 
 class SearchLawsRequest(BaseModel):

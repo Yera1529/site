@@ -43,8 +43,10 @@ class StorageService:
         try:
             if file_type == "pdf":
                 return self._extract_pdf(str(full_path))
-            elif file_type in ("docx", "doc"):
+            elif file_type == "docx":
                 return self._extract_docx(str(full_path))
+            elif file_type == "doc":
+                return self._extract_doc(str(full_path))
             elif file_type == "txt":
                 return full_path.read_text(encoding="utf-8", errors="ignore")
             elif file_type == "rtf":
@@ -104,6 +106,32 @@ class StorageService:
                     parts.append(f"[Нижний колонтитул: {text}]")
 
         return "\n".join(parts)
+
+    @staticmethod
+    def _extract_doc(path: str) -> str:
+        """Extract text from old-format .doc files using docx2txt.
+        python-docx does NOT support .doc, only .docx.
+        docx2txt handles both formats.
+        """
+        try:
+            text = docx2txt.process(path)
+            if text and text.strip():
+                return text.strip()
+        except Exception:
+            pass
+        # Fallback: try reading as plain text (some .doc files are actually RTF)
+        try:
+            with open(path, "r", encoding="utf-8", errors="ignore") as f:
+                raw = f.read()
+            if raw.startswith("{\\rtf"):
+                import re
+                text = re.sub(r"\\[a-z]+\d*\s?", " ", raw)
+                text = re.sub(r"[{}]", "", text)
+                text = re.sub(r"\s+", " ", text).strip()
+                return text
+        except Exception:
+            pass
+        return "[Не удалось извлечь текст из .doc файла]"
 
 
     @staticmethod

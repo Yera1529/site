@@ -1,8 +1,6 @@
 "use client";
 
 import { useState, useEffect } from "react";
-import { useRouter } from "next/navigation";
-import { useAuth } from "@/lib/auth";
 import { api } from "@/lib/api";
 import Navbar from "@/components/Navbar";
 import { AppSetting } from "@/types";
@@ -24,7 +22,7 @@ const SETTING_FIELDS = [
     placeholder: "http://localhost:11434/v1/chat/completions",
     icon: Server,
     description:
-      "URL-адрес OpenAI-совместимого эндпоинта (Ollama, vLLM и др.)",
+      "URL-адрес OpenAI-совместимого эндпоинта (Ollama, vLLM, Google AI и др.)",
   },
   {
     key: "ai_api_key",
@@ -37,10 +35,10 @@ const SETTING_FIELDS = [
   {
     key: "ai_model",
     label: "Название модели ИИ",
-    placeholder: "qwen3:30b-a3b",
+    placeholder: "gemini-2.0-flash",
     icon: BrainCircuit,
     description:
-      "Qwen3-30B-A3B — MoE модель: 30B параметров, 3.3B активных. Контекст до 131k.",
+      "Идентификатор модели для генерации текста. Укажите модель, доступную на выбранном эндпоинте.",
   },
   {
     key: "embedding_model",
@@ -52,37 +50,22 @@ const SETTING_FIELDS = [
 ];
 
 export default function SettingsPage() {
-  const { user, loading: authLoading } = useAuth();
-  const router = useRouter();
   const [settings, setSettings] = useState<Record<string, string>>({});
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
   const [saved, setSaved] = useState(false);
 
   useEffect(() => {
-    if (!authLoading && !user) {
-      router.replace("/login");
-      return;
-    }
-    if (!authLoading && user && user.role !== "admin") {
-      router.replace("/dashboard");
-      return;
-    }
-  }, [user, authLoading, router]);
-
-  useEffect(() => {
-    if (user?.role === "admin") {
-      api
-        .getSettings()
-        .then((data) => {
-          const map: Record<string, string> = {};
-          (data as AppSetting[]).forEach((s) => (map[s.key] = s.value));
-          setSettings(map);
-        })
-        .catch(console.error)
-        .finally(() => setLoading(false));
-    }
-  }, [user]);
+    api
+      .getSettings()
+      .then((data) => {
+        const map: Record<string, string> = {};
+        (data as AppSetting[]).forEach((s) => (map[s.key] = s.value));
+        setSettings(map);
+      })
+      .catch(console.error)
+      .finally(() => setLoading(false));
+  }, []);
 
   const handleSave = async () => {
     setSaving(true);
@@ -107,28 +90,7 @@ export default function SettingsPage() {
 
   const thinkingMode = settings["ai_thinking_mode"] || "enabled";
 
-  if (authLoading || !user) {
-    return (
-      <div className="min-h-screen flex items-center justify-center">
-        <Loader2 className="w-8 h-8 animate-spin text-brand-600" />
-      </div>
-    );
-  }
 
-  if (user.role !== "admin") {
-    return (
-      <div className="min-h-screen bg-gray-50">
-        <Navbar />
-        <div className="flex flex-col items-center justify-center py-20">
-          <ShieldAlert className="w-12 h-12 text-red-400 mb-3" />
-          <p className="text-lg font-medium text-gray-700">Доступ запрещён</p>
-          <p className="text-sm text-gray-500 mt-1">
-            Эта страница доступна только администраторам
-          </p>
-        </div>
-      </div>
-    );
-  }
 
   return (
     <div className="min-h-screen bg-gray-50">
@@ -137,7 +99,7 @@ export default function SettingsPage() {
       <main className="max-w-2xl mx-auto px-6 py-8">
         <h1 className="text-2xl font-bold text-gray-900 mb-1">Настройки</h1>
         <p className="text-sm text-gray-500 mb-8">
-          Конфигурация Qwen3-30B-A3B и параметров генерации. Изменения
+          Конфигурация модели ИИ и параметров генерации. Изменения
           применяются немедленно.
         </p>
 
@@ -150,7 +112,7 @@ export default function SettingsPage() {
             {SETTING_FIELDS.map((field) => (
               <div
                 key={field.key}
-                className="bg-white rounded-xl border border-gray-200 p-5"
+                className="bg-white rounded-xl border border-gray-200 p-5 hover:border-brand-200 hover:shadow-md transition-all duration-200"
               >
                 <div className="flex items-center gap-3 mb-3">
                   <div className="w-9 h-9 rounded-lg bg-brand-50 flex items-center justify-center">
@@ -190,7 +152,7 @@ export default function SettingsPage() {
                     Режим рассуждения (Thinking Mode)
                   </label>
                   <p className="text-xs text-gray-500">
-                    Qwen3 поддерживает два режима работы для генерации
+                    Модель поддерживает два режима работы для генерации
                     представлений
                   </p>
                 </div>
@@ -223,10 +185,9 @@ export default function SettingsPage() {
                       </span>
                     </p>
                     <p className="text-xs text-gray-500 mt-0.5">
-                      Модель &quot;думает&quot; перед ответом: анализирует факты,
+                      Модель «думает» перед ответом: анализирует факты,
                       проверяет нормативные ссылки, формирует причинные связи.
-                      Параметры: temperature=0.6, top_p=0.95. Медленнее, но
-                      точнее для юридических текстов.
+                      Медленнее, но точнее для юридических текстов.
                     </p>
                   </div>
                 </label>
@@ -254,8 +215,8 @@ export default function SettingsPage() {
                       Non-Thinking — быстрый режим
                     </p>
                     <p className="text-xs text-gray-500 mt-0.5">
-                      Прямая генерация без этапа рассуждения. Параметры:
-                      temperature=0.7, top_p=0.8. Быстрее, подходит для простых
+                      Прямая генерация без этапа рассуждения.
+                      Быстрее, подходит для простых
                       редактур и правок.
                     </p>
                   </div>

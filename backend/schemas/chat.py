@@ -29,6 +29,9 @@ class SelectedLaw(BaseModel):
     article_number: str
     category: str
     score: float
+    norm_purpose: Optional[str] = None
+    violation_criteria: Optional[str] = None
+    applicable_measures: Optional[str] = None
 
 
 class GenerateDocumentRequest(BaseModel):
@@ -50,6 +53,9 @@ class RetrievedLawResponse(BaseModel):
     article_number: str
     category: str
     score: float
+    norm_purpose: Optional[str] = None
+    violation_criteria: Optional[str] = None
+    applicable_measures: Optional[str] = None
 
 
 class CitationCheckResponse(BaseModel):
@@ -59,7 +65,7 @@ class CitationCheckResponse(BaseModel):
 
 class GenerateDocumentResponse(BaseModel):
     content: str
-    template_name: str
+    template_name: Optional[str] = None
     representation_id: Optional[uuid.UUID] = None
     validation: Optional[ValidationReport] = None
     retrieved_laws: Optional[List[RetrievedLawResponse]] = None

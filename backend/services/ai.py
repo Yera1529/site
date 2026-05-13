@@ -324,8 +324,25 @@ class AIService:
     def __init__(self):
         settings = get_settings()
         self.api_key = settings.ai_api_key
-        self.model_name = settings.ai_model  # e.g. "gemini-2.5-pro-exp-03-25"
-        self._client = genai.Client(api_key=self.api_key)
+        self.model_name = settings.ai_model  # e.g. "gemini-2.5-flash"
+
+        if self.api_key:
+            # Direct Gemini API key authentication
+            self._client = genai.Client(api_key=self.api_key)
+            logger.info("AIService: using Gemini API key auth, model=%s", self.model_name)
+        else:
+            # Vertex AI with service account (GOOGLE_APPLICATION_CREDENTIALS)
+            project = settings.vertex_ai_project
+            location = settings.vertex_ai_location
+            self._client = genai.Client(
+                vertexai=True,
+                project=project,
+                location=location,
+            )
+            logger.info(
+                "AIService: using Vertex AI auth, project=%s, location=%s, model=%s",
+                project, location, self.model_name,
+            )
 
     def _make_config(self, max_tokens: int = 16384) -> genai_types.GenerateContentConfig:
         return genai_types.GenerateContentConfig(
@@ -454,18 +471,92 @@ class AIService:
 
         if retrieved_laws:
             laws_section = "\n\n<legal_context>\n"
-            laws_section += (
-                "Ниже — нормы, применимые к данному делу. ИСПОЛЬЗУЙ ТОЛЬКО эти нормы "
-                "при указании нарушенных законов и мер. Для каждого нарушения "
-                "процитируй соответствующую статью из этого списка.\n\n"
-            )
-            for i, law in enumerate(retrieved_laws, 1):
-                title = law.get("law_title", "")
-                art = law.get("article_number", "")
-                text = law.get("text", "")[:2000]
-                header = f"{title}, Статья {art}" if art else title
-                laws_section += f'<law id="{i}">\n  <title>{header}</title>\n  <text>{text}</text>\n</law>\n'
+
+            # Separate norms by purpose for structured citation
+            violation_laws = []
+            remedy_laws = []
+            both_laws = []
+            other_laws = []
+
+            for law in retrieved_laws:
+                purpose = law.get("norm_purpose", "")
+                if purpose == "violation":
+                    violation_laws.append(law)
+                elif purpose == "remedy":
+                    remedy_laws.append(law)
+                elif purpose == "both":
+                    both_laws.append(law)
+                else:
+                    other_laws.append(law)
+
+            # If no norm_purpose data, fall back to flat list
+            if not violation_laws and not remedy_laws and not both_laws:
+                laws_section += (
+                    "Ниже — нормы, применимые к данному делу. ИСПОЛЬЗУЙ ТОЛЬКО эти нормы "
+                    "при указании нарушенных законов и мер. Для каждого нарушения "
+                    "процитируй соответствующую статью из этого списка.\n\n"
+                )
+                for i, law in enumerate(other_laws or retrieved_laws, 1):
+                    title = law.get("law_title", "")
+                    art = law.get("article_number", "")
+                    text = law.get("text", "")[:2000]
+                    header = f"{title}, Статья {art}" if art else title
+                    laws_section += f'<law id="{i}">\n  <title>{header}</title>\n  <text>{text}</text>\n</law>\n'
+            else:
+                idx = 1
+
+                if violation_laws or both_laws:
+                    laws_section += (
+                        "═══ НАРУШЕННЫЕ НОРМЫ (violation) ═══\n"
+                        "Используй эти нормы при описании нарушений — ЧТО было нарушено.\n"
+                        "Каждое нарушение в представлении должно ссылаться на конкретную статью из этого блока.\n\n"
+                    )
+                    for law in violation_laws + both_laws:
+                        title = law.get("law_title", "")
+                        art = law.get("article_number", "")
+                        text = law.get("text", "")[:2000]
+                        vc = law.get("violation_criteria", "")
+                        header = f"{title}, Статья {art}" if art else title
+                        laws_section += f'<law id="{idx}" purpose="violation">\n  <title>{header}</title>\n'
+                        if vc:
+                            laws_section += f'  <violation_criteria>{vc}</violation_criteria>\n'
+                        laws_section += f'  <text>{text}</text>\n</law>\n'
+                        idx += 1
+
+                if remedy_laws or both_laws:
+                    laws_section += (
+                        "\n═══ НОРМЫ-ОСНОВАНИЯ ДЛЯ УСТРАНЕНИЯ (remedy) ═══\n"
+                        "Используй эти нормы при формулировке мер по устранению — "
+                        "НА ОСНОВАНИИ ЧЕГО адресат должен устранить нарушения.\n"
+                        "В разделе ПРЕДЛАГАЮ ссылайся на эти нормы как правовое основание мер.\n\n"
+                    )
+                    for law in remedy_laws + both_laws:
+                        title = law.get("law_title", "")
+                        art = law.get("article_number", "")
+                        text = law.get("text", "")[:2000]
+                        am = law.get("applicable_measures", "")
+                        header = f"{title}, Статья {art}" if art else title
+                        laws_section += f'<law id="{idx}" purpose="remedy">\n  <title>{header}</title>\n'
+                        if am:
+                            laws_section += f'  <applicable_measures>{am}</applicable_measures>\n'
+                        laws_section += f'  <text>{text}</text>\n</law>\n'
+                        idx += 1
+
+                if other_laws:
+                    laws_section += "\n═══ ДОПОЛНИТЕЛЬНЫЕ НОРМЫ ═══\n\n"
+                    for law in other_laws:
+                        title = law.get("law_title", "")
+                        art = law.get("article_number", "")
+                        text = law.get("text", "")[:2000]
+                        header = f"{title}, Статья {art}" if art else title
+                        laws_section += f'<law id="{idx}">\n  <title>{header}</title>\n  <text>{text}</text>\n</law>\n'
+                        idx += 1
+
             laws_section += "</legal_context>\n"
+            logger.info(
+                "build_generation_prompt: legal_context built with %d violation, %d remedy, %d both, %d other laws. Total section length: %d chars",
+                len(violation_laws), len(remedy_laws), len(both_laws), len(other_laws), len(laws_section)
+            )
             user_parts.append(laws_section)
 
         if kb_context:
@@ -639,7 +730,6 @@ class AIService:
             if "</think>" in content:
                 content = re.sub(r"<think>.*?</think>", "", content, flags=re.DOTALL)
             elif "<think>" in content:
-                # Unclosed tag — just remove the opening tag and everything before useful text
                 content = content.split("<think>", 1)[-1]
 
             if "</scratchpad>" in content:
@@ -656,6 +746,21 @@ class AIService:
                 else:
                     # Can't find document — strip the scratchpad opening and return rest
                     content = content.split("<scratchpad>", 1)[-1]
+
+            # Handle plain-text "scratchpad" marker (no HTML tags) from Gemini 2.5
+            # Pattern: starts with "scratchpad\n" or "Scratchpad\n"
+            scratchpad_plain = re.match(r'^(?:scratchpad|Scratchpad)\s*\n', content, re.IGNORECASE)
+            if scratchpad_plain:
+                # Find where the actual document starts (HTML marker)
+                for marker in ["<p ", "<h1", "<div", "П Р Е Д", "ПРЕДСТА", "Руководител", "Директор"]:
+                    if marker in content:
+                        idx = content.find(marker)
+                        content = content[idx:]
+                        break
+
+            # Strip markdown code block wrappers (```html ... ```)
+            content = re.sub(r'^```(?:html)?\s*\n', '', content, flags=re.MULTILINE)
+            content = re.sub(r'\n```\s*$', '', content, flags=re.MULTILINE)
 
             content = content.strip()
             logger.info("_call_llm: cleaned_len=%d", len(content))

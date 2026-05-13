@@ -1,8 +1,6 @@
 "use client";
 
 import { useState, useEffect, useRef } from "react";
-import { useRouter } from "next/navigation";
-import { useAuth } from "@/lib/auth";
 import { api } from "@/lib/api";
 import Navbar from "@/components/Navbar";
 import { KBDocument, KBStats } from "@/types";
@@ -26,21 +24,12 @@ interface UploadStatus {
 }
 
 export default function KnowledgeBasePage() {
-  const { user, loading: authLoading } = useAuth();
-  const router = useRouter();
-
   const [documents, setDocuments] = useState<KBDocument[]>([]);
   const [stats, setStats] = useState<KBStats | null>(null);
   const [loading, setLoading] = useState(true);
   const [uploads, setUploads] = useState<UploadStatus[]>([]);
   const [uploading, setUploading] = useState(false);
   const inputRef = useRef<HTMLInputElement>(null);
-
-  useEffect(() => {
-    if (!authLoading && (!user || user.role !== "admin")) {
-      router.replace("/dashboard");
-    }
-  }, [user, authLoading, router]);
 
   const loadData = async () => {
     try {
@@ -58,14 +47,8 @@ export default function KnowledgeBasePage() {
   };
 
   useEffect(() => {
-    if (!authLoading) {
-      if (user?.role === "admin") {
-        loadData();
-      } else {
-        setLoading(false);
-      }
-    }
-  }, [user, authLoading]);
+    loadData();
+  }, []);
 
   const handleUpload = async (fileList: FileList | null) => {
     if (!fileList || fileList.length === 0) return;
@@ -136,7 +119,7 @@ export default function KnowledgeBasePage() {
       minute: "2-digit",
     });
 
-  if (authLoading || loading) {
+  if (loading) {
     return (
       <div className="min-h-screen flex items-center justify-center">
         <Loader2 className="w-8 h-8 animate-spin text-brand-600" />
@@ -152,7 +135,7 @@ export default function KnowledgeBasePage() {
           <div>
             <h1 className="text-2xl font-bold text-gray-900 flex items-center gap-2">
               <Database className="w-6 h-6 text-brand-600" />
-              База знаний — ст.200 УПК РК
+              База знаний — ст.200 УПК Республики Казахстан
             </h1>
             <p className="text-sm text-gray-500 mt-1">
               Загрузите документы-представления для обучения RAG-системы
@@ -197,7 +180,7 @@ export default function KnowledgeBasePage() {
               Загруженные документы разбиваются на фрагменты, векторизуются и
               индексируются. При генерации представления система находит наиболее
               релевантные фрагменты и передаёт их модели как контекст, повышая
-              точность и соответствие стилю ст.200 УПК РК.
+              точность и соответствие стилю ст.200 УПК Республики Казахстан.
             </p>
           </div>
         </div>
@@ -218,7 +201,7 @@ export default function KnowledgeBasePage() {
             </p>
             <p className="text-xs text-gray-400 mt-1">
               Поддерживается пакетная загрузка (50+ файлов). Документы должны
-              содержать представления по ст.200 УПК РК.
+              содержать представления по ст.200 УПК Республики Казахстан.
             </p>
             <input
               ref={inputRef}

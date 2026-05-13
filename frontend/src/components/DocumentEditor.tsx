@@ -127,6 +127,7 @@ export default function DocumentEditor({
   const prevContentRef = useRef<string>("");
 
   const editor = useEditor({
+    immediatelyRender: false,
     extensions: [
       StarterKit.configure({
         heading: { levels: [1, 2, 3] },
@@ -182,12 +183,46 @@ export default function DocumentEditor({
     setExporting(true);
     try {
       const blob = await api.exportDocx(editor.getHTML(), "документ.docx");
-      const url = URL.createObjectURL(blob);
-      const a = document.createElement("a");
-      a.href = url;
-      a.download = "документ.docx";
-      a.click();
-      URL.revokeObjectURL(url);
+
+      // Try native "Save As" dialog (File System Access API — Chrome/Edge)
+      if (typeof window !== "undefined" && "showSaveFilePicker" in window) {
+        try {
+          const handle = await (window as any).showSaveFilePicker({
+            suggestedName: "документ.docx",
+            types: [
+              {
+                description: "Документ Word",
+                accept: {
+                  "application/vnd.openxmlformats-officedocument.wordprocessingml.document":
+                    [".docx"],
+                },
+              },
+            ],
+          });
+          const writable = await handle.createWritable();
+          await writable.write(blob);
+          await writable.close();
+        } catch (pickerErr: any) {
+          // User cancelled the dialog — not an error
+          if (pickerErr?.name === "AbortError") {
+            return;
+          }
+          throw pickerErr;
+        }
+      } else {
+        // Fallback: classic blob download with explicit DOM insertion
+        const url = URL.createObjectURL(blob);
+        const a = document.createElement("a");
+        a.style.display = "none";
+        a.href = url;
+        a.download = "документ.docx";
+        document.body.appendChild(a);
+        a.click();
+        setTimeout(() => {
+          URL.revokeObjectURL(url);
+          document.body.removeChild(a);
+        }, 500);
+      }
     } catch (e: any) {
       alert("Ошибка экспорта: " + e.message);
     } finally {

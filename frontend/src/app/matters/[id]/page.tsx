@@ -2,7 +2,6 @@
 
 import { useState, useEffect, useCallback, useRef } from "react";
 import { useRouter, useParams, useSearchParams } from "next/navigation";
-import { useAuth } from "@/lib/auth";
 import { api } from "@/lib/api";
 import Navbar from "@/components/Navbar";
 import FilesSidebar from "@/components/FilesSidebar";
@@ -33,7 +32,6 @@ import {
 type Tab = "chat" | "editor" | "instructions";
 
 export default function MatterDetailPage() {
-  const { user, loading: authLoading } = useAuth();
   const router = useRouter();
   const params = useParams();
   const searchParams = useSearchParams();
@@ -73,9 +71,7 @@ export default function MatterDetailPage() {
   const autoSaveTimer = useRef<NodeJS.Timeout | null>(null);
   const editorSaveTimer = useRef<NodeJS.Timeout | null>(null);
 
-  useEffect(() => {
-    if (!authLoading && !user) router.replace("/login");
-  }, [user, authLoading, router]);
+
 
   const loadMatter = useCallback(async () => {
     try {
@@ -100,8 +96,8 @@ export default function MatterDetailPage() {
   }, [matterId]);
 
   useEffect(() => {
-    if (user && matterId) loadMatter();
-  }, [user, matterId, loadMatter]);
+    if (matterId) loadMatter();
+  }, [matterId, loadMatter]);
 
   useEffect(() => {
     if (!repIdFromUrl || loading) return;
@@ -262,7 +258,7 @@ export default function MatterDetailPage() {
     }
   };
 
-  if (authLoading || loading || !user) {
+  if (loading) {
     return (
       <div className="min-h-screen flex items-center justify-center">
         <Loader2 className="w-8 h-8 animate-spin text-brand-600" />
@@ -353,7 +349,7 @@ export default function MatterDetailPage() {
       {/* Generate document wizard */}
       {showGenDialog && (
         <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 px-4">
-          <div className="bg-white rounded-2xl shadow-xl w-full max-w-lg p-6">
+          <div className="bg-white rounded-2xl shadow-xl w-full max-w-3xl p-6 max-h-[90vh] flex flex-col">
             <div className="flex items-center justify-between mb-4">
               <h3 className="text-lg font-semibold text-gray-900 flex items-center gap-2">
                 <Sparkles className="w-5 h-5 text-brand-600" />
@@ -385,7 +381,7 @@ export default function MatterDetailPage() {
                 </div>
                 <div>
                   <label className="block text-sm font-medium text-gray-700 mb-1">Дополнительные указания</label>
-                  <textarea value={additionalInstructions} onChange={(e) => setAdditionalInstructions(e.target.value)} rows={3} className="w-full px-4 py-2.5 rounded-lg border border-gray-300 text-sm resize-none focus:outline-none focus:ring-2 focus:ring-brand-500" placeholder="Укажите конкретные факты, статью УК РК, наименование органа…" />
+                  <textarea value={additionalInstructions} onChange={(e) => setAdditionalInstructions(e.target.value)} rows={3} className="w-full px-4 py-2.5 rounded-lg border border-gray-300 text-sm resize-none focus:outline-none focus:ring-2 focus:ring-brand-500" placeholder="Укажите конкретные факты, статью УК Республики Казахстан, наименование органа…" />
                 </div>
                 <div className="flex items-center gap-3 pt-2">
                   <button onClick={() => { setShowGenDialog(false); setWizardStep(1); }} className="flex-1 py-2.5 border border-gray-300 text-gray-700 text-sm font-medium rounded-lg hover:bg-gray-50">Отмена</button>
@@ -399,36 +395,52 @@ export default function MatterDetailPage() {
 
             {/* Step 2: Retrieved laws selection */}
             {wizardStep === 2 && (
-              <div className="space-y-4">
+              <div className="space-y-4 flex-1 flex flex-col min-h-0">
                 <div className="flex items-center gap-2 text-sm text-gray-700">
                   <Scale className="w-4 h-4 text-brand-600" />
                   <span className="font-medium">Найденные нормы закона ({retrievedLaws.length})</span>
                 </div>
                 <p className="text-xs text-gray-500">Снимите отметку с нерелевантных норм. Отмеченные будут переданы модели для обоснования.</p>
-                <div className="max-h-64 overflow-y-auto border border-gray-200 rounded-lg divide-y divide-gray-100">
+                <div className="flex-1 min-h-0 overflow-y-auto border border-gray-200 rounded-lg divide-y divide-gray-100">
                   {retrievedLaws.length === 0 ? (
                     <p className="p-4 text-xs text-gray-400 text-center">Нормативные акты не найдены в базе законодательства. Загрузите законы в разделе «Законодательство».</p>
-                  ) : retrievedLaws.map((law, i) => (
-                    <label key={i} className="flex items-start gap-3 p-3 hover:bg-gray-50 cursor-pointer">
-                      <input type="checkbox" checked={selectedLaws.has(i)} onChange={() => {
-                        setSelectedLaws((prev) => {
-                          const next = new Set(prev);
-                          if (next.has(i)) next.delete(i); else next.add(i);
-                          return next;
-                        });
-                      }} className="mt-1 rounded text-brand-600 focus:ring-brand-500" />
-                      <div className="flex-1 min-w-0">
-                        <div className="flex items-center gap-2">
-                          <span className="text-xs font-medium text-gray-900">{law.law_title}</span>
-                          {law.article_number && <span className="text-[10px] bg-brand-50 text-brand-700 px-1.5 py-0.5 rounded">ст.{law.article_number}</span>}
-                          <span className="text-[10px] text-gray-400 ml-auto">{Math.round(Math.max(0, Math.min(100, (law.score - 0.45) / (0.9 - 0.45) * 100)))}%</span>
+                  ) : retrievedLaws.map((law, i) => {
+                    // Realistic relevance percentage: calibrated for FAISS inner-product scores
+                    const rawScore = typeof law.score === 'number' ? law.score : 0;
+                    const pct = Math.round(Math.max(5, Math.min(95, rawScore * 65 + 10)));
+                    const pctColor = pct >= 70 ? "text-green-600 bg-green-50" : pct >= 45 ? "text-amber-600 bg-amber-50" : "text-gray-500 bg-gray-100";
+                    // Strip markdown formatting from text
+                    const cleanText = law.text
+                      .replace(/\*\*([^*]+)\*\*/g, '$1')
+                      .replace(/\*([^*]+)\*/g, '$1')
+                      .replace(/#{1,6}\s*/g, '')
+                      .replace(/\[([^\]]+)\]\([^)]+\)/g, '$1')
+                      .replace(/^[-*+]\s+/gm, '• ')
+                      .replace(/`([^`]+)`/g, '$1')
+                      .replace(/\n{2,}/g, '\n')
+                      .trim();
+                    return (
+                      <label key={i} className="flex items-start gap-3 p-4 hover:bg-gray-50 cursor-pointer group">
+                        <input type="checkbox" checked={selectedLaws.has(i)} onChange={() => {
+                          setSelectedLaws((prev) => {
+                            const next = new Set(prev);
+                            if (next.has(i)) next.delete(i); else next.add(i);
+                            return next;
+                          });
+                        }} className="mt-1 rounded text-brand-600 focus:ring-brand-500 flex-shrink-0" />
+                        <div className="flex-1 min-w-0">
+                          <div className="flex items-start gap-2 flex-wrap">
+                            <span className="text-sm font-medium text-gray-900">{law.law_title}</span>
+                            {law.article_number && <span className="text-[11px] bg-brand-50 text-brand-700 px-2 py-0.5 rounded font-medium whitespace-nowrap">ст.{law.article_number}</span>}
+                            <span className={`text-[11px] font-semibold px-2 py-0.5 rounded ml-auto whitespace-nowrap ${pctColor}`}>{pct}%</span>
+                          </div>
+                          <p className="text-xs text-gray-600 mt-1.5 leading-relaxed whitespace-pre-line line-clamp-4 group-hover:line-clamp-none transition-all">{cleanText.substring(0, 500)}</p>
                         </div>
-                        <p className="text-xs text-gray-500 mt-0.5 line-clamp-2">{law.text.substring(0, 200)}</p>
-                      </div>
-                    </label>
-                  ))}
+                      </label>
+                    );
+                  })}
                 </div>
-                <div className="flex items-center gap-3 pt-2">
+                <div className="flex items-center gap-3 pt-2 flex-shrink-0">
                   <button onClick={() => setWizardStep(1)} className="flex items-center justify-center gap-1 flex-1 py-2.5 border border-gray-300 text-gray-700 text-sm font-medium rounded-lg hover:bg-gray-50">
                     <ArrowLeft className="w-4 h-4" />Назад
                   </button>
@@ -545,9 +557,9 @@ export default function MatterDetailPage() {
                             ({
                               дата_место: "дата/место",
                               ердр: "номер ЕРДР",
-                              статья_ук: "статья УК РК",
+                              статья_ук: "статья УК Республики Казахстан",
                               обстоятельства: "обстоятельства",
-                              нормативные_акты: "ст.200 УПК РК",
+                              нормативные_акты: "ст.200 УПК Республики Казахстан",
                               предлагаю: "«ПРЕДЛАГАЮ»",
                               срок: "месячный срок",
                             }[s] || s)
@@ -597,7 +609,7 @@ export default function MatterDetailPage() {
                       <Loader2 className="w-8 h-8 animate-spin text-brand-600 mb-4" />
                       <p className="text-sm font-medium text-gray-700">
                         {generating
-                          ? "Qwen3 генерирует представление…"
+                          ? "Gemini генерирует представление…"
                           : "Загрузка шаблона…"}
                       </p>
                       <p className="text-xs text-gray-400 mt-1">
@@ -634,7 +646,7 @@ export default function MatterDetailPage() {
                   onChange={(e) => handleInstructionsChange(e.target.value)}
                   rows={14}
                   className="w-full px-4 py-3 rounded-xl border border-gray-300 text-sm resize-none focus:outline-none focus:ring-2 focus:ring-brand-500 focus:border-transparent leading-relaxed"
-                  placeholder={`Пример:\n\n- Юрисдикция: Республика Казахстан\n- Тон: Формальный\n- Область права: уголовное право\n- Статья: ст. 188 УК РК\n- Представление: по ст.200 УПК РК\n- Ключевые даты и обстоятельства`}
+                  placeholder={`Пример:\n\n- Юрисдикция: Республика Казахстан\n- Тон: Формальный\n- Область права: уголовное право\n- Статья: ст. 188 УК Республики Казахстан\n- Представление: по ст.200 УПК Республики Казахстан\n- Ключевые даты и обстоятельства`}
                 />
                 <div className="flex items-center justify-between mt-4">
                   <div className="text-xs text-gray-400">

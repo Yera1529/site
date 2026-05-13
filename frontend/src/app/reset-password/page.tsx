@@ -2,6 +2,7 @@
 
 import { useState } from "react";
 import Link from "next/link";
+import Image from "next/image";
 import { api } from "@/lib/api";
 import { Scale, Loader2, CheckCircle } from "lucide-react";
 
@@ -47,9 +48,7 @@ export default function ResetPasswordPage() {
       <div className="govt-bar text-white py-3 px-6">
         <div className="max-w-6xl mx-auto flex items-center gap-2.5">
           <Link href="/" className="flex items-center gap-2">
-            <div className="w-7 h-7 bg-white/15 rounded-md flex items-center justify-center">
-              <Scale className="w-4 h-4 text-white" />
-            </div>
+            <Image src="/mvd-logo.png" alt="МВД РК" width={28} height={28} className="rounded-full object-contain" />
             <span className="text-base font-bold">Представление<span className="text-accent-300">Ai</span></span>
           </Link>
         </div>

@@ -382,4 +382,21 @@ export const api = {
 
   updateSettings: (updates: { key: string; value: string }[]) =>
     request("/api/settings", { method: "PUT", body: JSON.stringify(updates) }),
+
+  // RAG Laws (enriched JSONL norms search)
+  searchRAGLaws: (query: string, organFilter?: string, topK?: number) =>
+    request("/api/rag-laws/search", {
+      method: "POST",
+      body: JSON.stringify({
+        query,
+        organ_filter: organFilter || null,
+        top_k: topK || 5,
+      }),
+    }),
+
+  getRAGLawsStats: () =>
+    request<{ total_records: number; index_size: number; indexed: boolean }>("/api/rag-laws/stats"),
+
+  rebuildRAGLawsIndex: () =>
+    request("/api/rag-laws/rebuild", { method: "POST" }),
 };

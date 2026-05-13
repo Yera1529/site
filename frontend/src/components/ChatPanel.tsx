@@ -3,7 +3,7 @@
 import { useState, useRef, useEffect } from "react";
 import { ChatMessage } from "@/types";
 import { api } from "@/lib/api";
-import { Send, Loader2, Bot, User, Sparkles } from "lucide-react";
+import { Send, Loader2, Bot, User, Sparkles, ChevronDown, ChevronRight } from "lucide-react";
 import { motion, AnimatePresence } from "framer-motion";
 
 interface ChatPanelProps {
@@ -12,6 +12,43 @@ interface ChatPanelProps {
   onMessagesUpdated: () => void;
 }
 
+/** Renders assistant messages with proper HTML rendering and collapsible thinking blocks */
+function AssistantContent({
+  content,
+  parseContent,
+}: {
+  content: string;
+  parseContent: (content: string) => { thinking: string; body: string; isHtml: boolean };
+}) {
+  const [showThinking, setShowThinking] = useState(false);
+  const { thinking, body, isHtml } = parseContent(content);
+
+  return (
+    <div className="text-sm leading-relaxed break-words" style={{ overflowWrap: "anywhere", wordBreak: "break-word" }}>
+      {thinking && (
+        <div className="mb-2">
+          <button
+            onClick={() => setShowThinking(!showThinking)}
+            className="flex items-center gap-1 text-xs text-gray-400 hover:text-gray-600 transition-colors"
+          >
+            {showThinking ? <ChevronDown className="w-3 h-3" /> : <ChevronRight className="w-3 h-3" />}
+            Анализ ИИ
+          </button>
+          {showThinking && (
+            <div className="mt-1 text-xs text-gray-500 bg-gray-50 rounded-lg p-2 whitespace-pre-wrap border border-gray-100">
+              {thinking}
+            </div>
+          )}
+        </div>
+      )}
+      {isHtml ? (
+        <div className="chat-html-content" dangerouslySetInnerHTML={{ __html: body }} />
+      ) : (
+        <div style={{ whiteSpace: "pre-wrap" }}>{body}</div>
+      )}
+    </div>
+  );
+}
 export default function ChatPanel({ matterId, messages, onMessagesUpdated }: ChatPanelProps) {
   const [input, setInput] = useState("");
   const [streaming, setStreaming] = useState(false);
@@ -60,6 +97,36 @@ export default function ChatPanel({ matterId, messages, onMessagesUpdated }: Cha
     return d.toLocaleTimeString("ru-RU", { hour: "2-digit", minute: "2-digit" });
   };
 
+  /**
+   * Separate AI "thinking" blocks from the actual response.
+   * The model sometimes outputs analysis/reasoning before the document.
+   * Pattern: content starts with plain-text reasoning, then switches to HTML.
+   */
+  const parseAssistantContent = (content: string) => {
+    // Check for [Документ сгенерирован:] prefix from generate-document flow
+    const docGenMatch = content.match(/^\[Документ сгенерирован:[^\]]*\]\s*/s);
+    const cleanContent = docGenMatch ? content.slice(docGenMatch[0].length) : content;
+
+    // Detect if the content contains HTML tags (i.e., generated document)
+    const hasHtml = /<(?:h[1-6]|p|div|center|br|table|ul|ol|li|span|strong|em)\b[^>]*>/i.test(cleanContent);
+    if (!hasHtml) {
+      return { thinking: "", body: cleanContent, isHtml: false };
+    }
+
+    // Find where HTML starts
+    const htmlStart = cleanContent.search(/<(?:h[1-6]|p|div|center|table)\b/i);
+    if (htmlStart > 50) {
+      // There's a thinking block before the HTML
+      return {
+        thinking: cleanContent.slice(0, htmlStart).trim(),
+        body: cleanContent.slice(htmlStart),
+        isHtml: true,
+      };
+    }
+
+    return { thinking: "", body: cleanContent, isHtml: true };
+  };
+
   return (
     <div className="flex flex-col h-full bg-gradient-to-b from-slate-50 to-white relative">
       {/* Subtle background pattern */}
@@ -85,7 +152,7 @@ export default function ChatPanel({ matterId, messages, onMessagesUpdated }: Cha
                 <Bot className="w-10 h-10 text-white" />
               </div>
             </div>
-            <h3 className="text-lg font-semibold text-gray-800 mb-2">ИИ-ассистент МВД РК</h3>
+            <h3 className="text-lg font-semibold text-gray-800 mb-2">ИИ-ассистент МВД Республики Казахстан</h3>
             <p className="text-sm text-gray-500 max-w-xs leading-relaxed">
               Задайте вопрос по материалам дела, попросите проанализировать документ или подготовить выжимку из фабулы.
             </p>
@@ -118,7 +185,11 @@ export default function ChatPanel({ matterId, messages, onMessagesUpdated }: Cha
                 </div>
               )}
               <div className={msg.role === "user" ? "chat-bubble-user" : "chat-bubble-ai"}>
-                <div className="text-sm leading-relaxed break-words" style={{ overflowWrap: "anywhere", wordBreak: "break-word", whiteSpace: "pre-wrap" }}>{msg.content}</div>
+                {msg.role === "assistant" ? (
+                  <AssistantContent content={msg.content} parseContent={parseAssistantContent} />
+                ) : (
+                  <div className="text-sm leading-relaxed break-words" style={{ overflowWrap: "anywhere", wordBreak: "break-word", whiteSpace: "pre-wrap" }}>{msg.content}</div>
+                )}
                 <div className={`flex items-center gap-1 mt-2 text-xs ${msg.role === "user" ? "text-white/60" : "text-gray-400"}`}>
                   {msg.role === "assistant" && <Sparkles className="w-3 h-3" />}
                   <span>{formatTime(msg.created_at)}</span>
@@ -144,7 +215,7 @@ export default function ChatPanel({ matterId, messages, onMessagesUpdated }: Cha
             </div>
             <div className="chat-bubble-ai generating-shimmer">
               {streamContent ? (
-                <div className="text-sm leading-relaxed relative z-10 break-words" style={{ overflowWrap: "anywhere", wordBreak: "break-word", whiteSpace: "pre-wrap" }}>{streamContent}</div>
+                <div className="text-sm leading-relaxed relative z-10 break-words chat-html-content" style={{ overflowWrap: "anywhere", wordBreak: "break-word" }} dangerouslySetInnerHTML={{ __html: streamContent }} />
               ) : (
                 <div className="flex items-center gap-2 py-1">
                   <div className="thinking-dots flex gap-1.5">
