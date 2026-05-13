@@ -29,6 +29,7 @@ from routers.auth import get_current_user
 from routers.matters import get_authorized_matter
 from services.ai import AIService, validate_representation, validate_law_citations
 from services.rag import RAGService
+from services.rag_laws import RAGLawsService
 from services.document import DocumentService
 from models.template import DocumentTemplate
 
@@ -74,16 +75,41 @@ async def chat(
     db.add(user_msg)
     await db.flush()
 
+    # Load extracted text from all uploaded files for this matter
+    file_result = await db.execute(
+        select(File).where(File.matter_id == data.matter_id)
+    )
+    files = file_result.scalars().all()
+    files_text_parts = []
+    for f in files:
+        if f.extracted_text:
+            label = f.original_name if hasattr(f, 'original_name') and f.original_name else (f.filename if hasattr(f, 'filename') else "документ")
+            files_text_parts.append(f"[Файл: {label}]\n{f.extracted_text}")
+    direct_file_context = "\n\n---\n\n".join(files_text_parts) if files_text_parts else ""
+
     rag = RAGService()
     combined = rag.query_combined(
         str(data.matter_id), data.message, top_k_matter=3, top_k_kb=5
     )
-    matter_context = "\n\n---\n\n".join(combined["matter"]) if combined["matter"] else ""
+    rag_matter_context = "\n\n---\n\n".join(combined["matter"]) if combined["matter"] else ""
     kb_context = (
         "\n\n---\n\n".join(combined["knowledge_base"])
         if combined["knowledge_base"]
         else ""
     )
+
+    # Combine direct file text with RAG results for full context
+    if direct_file_context and rag_matter_context:
+        matter_context = (
+            "## Полный текст загруженных документов дела\n"
+            + direct_file_context
+            + "\n\n## Дополнительные релевантные фрагменты\n"
+            + rag_matter_context
+        )
+    elif direct_file_context:
+        matter_context = "## Полный текст загруженных документов дела\n" + direct_file_context
+    else:
+        matter_context = rag_matter_context
 
     result = await db.execute(
         select(ChatMessage)
@@ -164,6 +190,33 @@ async def search_laws(
 
     rag = RAGService()
     laws = rag.search_relevant_laws(query_text, top_k=10)
+
+    # Also search FAISS-indexed enriched JSONL norms
+    try:
+        rag_laws = RAGLawsService()
+        jsonl_norms = rag_laws.search(query=query_text[:3000], top_k=10)
+        seen_keys = {(l.get("law_title", ""), l.get("article_number", "")) for l in laws}
+        for norm in jsonl_norms:
+            key = (norm["law_name"], norm["article_number"])
+            if key not in seen_keys:
+                seen_keys.add(key)
+                laws.append({
+                    "law_title": norm["law_name"],
+                    "article_number": norm["article_number"],
+                    "text": (
+                        f"{norm['original_text']}\n"
+                        f"Критерии нарушения: {norm['violation_criteria']}\n"
+                        f"Меры реагирования: {norm['applicable_measures']}"
+                    ),
+                    "norm_purpose": norm.get("norm_purpose", ""),
+                    "violation_criteria": norm.get("violation_criteria", ""),
+                    "applicable_measures": norm.get("applicable_measures", ""),
+                    "category": "enriched_jsonl",
+                    "score": norm.get("score", 0),
+                })
+    except Exception as e:
+        logger.warning("RAGLawsService search in search-laws failed: %s", e)
+
     return [RetrievedLaw(**law) for law in laws]
 
 
@@ -208,7 +261,51 @@ async def generate_document(
         law_query = all_text[:4000]
         if matter.description:
             law_query = f"{matter.description[:1000]} {law_query}"
+        # Search ChromaDB legislation (existing indexed laws)
         retrieved_laws = rag.search_relevant_laws(law_query, top_k=10)
+
+        # Search FAISS-indexed enriched JSONL norms (enriched_laws_200upk.jsonl)
+        try:
+            rag_laws = RAGLawsService()
+            # Extract organ hint from additional instructions or description
+            organ_hint = None
+            if data.additional_instructions:
+                organ_hint = data.additional_instructions
+            jsonl_norms = rag_laws.search(
+                query=law_query[:3000],
+                top_k=10,
+                organ_filter=organ_hint,
+            )
+            # Merge JSONL norms with ChromaDB results, deduplicating by law+article
+            seen_keys = {
+                (l.get("law_title", l.get("law_name", "")), l.get("article_number", ""))
+                for l in retrieved_laws
+            }
+            for norm in jsonl_norms:
+                key = (norm["law_name"], norm["article_number"])
+                if key not in seen_keys:
+                    seen_keys.add(key)
+                    # Map JSONL fields to the format expected by build_generation_prompt
+                    retrieved_laws.append({
+                        "law_title": norm["law_name"],
+                        "article_number": norm["article_number"],
+                        "text": (
+                            f"{norm['original_text']}\n"
+                            f"Критерии нарушения: {norm['violation_criteria']}\n"
+                            f"Меры реагирования: {norm['applicable_measures']}"
+                        ),
+                        "norm_purpose": norm.get("norm_purpose", ""),
+                        "violation_criteria": norm.get("violation_criteria", ""),
+                        "applicable_measures": norm.get("applicable_measures", ""),
+                        "category": "enriched_jsonl",
+                        "score": norm.get("score", 0),
+                    })
+            logger.info(
+                "generate_document: merged %d ChromaDB + %d JSONL norms = %d total",
+                len(retrieved_laws) - len(jsonl_norms), len(jsonl_norms), len(retrieved_laws)
+            )
+        except Exception as e:
+            logger.warning("RAGLawsService search failed (non-fatal): %s", e)
 
     # Build a structured case context block so AI clearly sees what data is available
     case_context_parts = []
@@ -236,6 +333,18 @@ async def generate_document(
 
     try:
         ai = AIService()
+        # Detailed logging of what goes into prompt
+        logger.info(
+            "generate_document: sending %d laws to prompt builder",
+            len(retrieved_laws) if retrieved_laws else 0
+        )
+        if retrieved_laws:
+            for i, law in enumerate(retrieved_laws[:5]):
+                logger.info(
+                    "  law[%d]: title=%s art=%s purpose=%s text_len=%d",
+                    i, law.get("law_title", "")[:50], law.get("article_number", ""),
+                    law.get("norm_purpose", "N/A"), len(law.get("text", ""))
+                )
         generated = await ai.generate_document(
             facts=case_context_str,
             custom_instructions=matter.custom_instructions or "",
