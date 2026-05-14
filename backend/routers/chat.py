@@ -166,7 +166,7 @@ async def search_laws(
 
     Builds a focused query from: qualification (article of criminal code),
     matter description, custom instructions, and extracted file text.
-    Uses AI (Gemini) to rerank candidates for accurate relevance scoring.
+    Returns FAISS results directly — user can deselect irrelevant norms in the UI.
     """
     matter = await get_authorized_matter(data.matter_id, user, db)
 
@@ -189,60 +189,51 @@ async def search_laws(
 
         query_text = " ".join(parts) if parts else "представление по ст.200 УПК РК"
 
-    logger.info("search-laws: query_text_len=%d, first_100=%s", len(query_text), query_text[:100])
+    logger.info("search-laws: query_len=%d", len(query_text))
 
-    rag = RAGService()
-    laws = rag.search_relevant_laws(query_text, top_k=10)
-    logger.info("search-laws: ChromaDB returned %d laws", len(laws))
+    laws: list[dict] = []
 
-    # Also search FAISS-indexed enriched JSONL norms
+    # Search FAISS-indexed enriched JSONL norms (primary source, 21k+ records)
     try:
         rag_laws = RAGLawsService()
-        logger.info("search-laws: FAISS index loaded=%s, records=%d",
-                     rag_laws._index is not None, len(rag_laws._records) if rag_laws._records else 0)
-        jsonl_norms = rag_laws.search(query=query_text[:3000], top_k=10)
+        logger.info("search-laws: FAISS index=%s records=%d",
+                     rag_laws._index is not None,
+                     len(rag_laws._records) if rag_laws._records else 0)
+        jsonl_norms = rag_laws.search(query=query_text[:3000], top_k=15)
         logger.info("search-laws: FAISS returned %d norms", len(jsonl_norms))
-        seen_keys = {(l.get("law_title", ""), l.get("article_number", "")) for l in laws}
         for norm in jsonl_norms:
-            key = (norm["law_name"], norm["article_number"])
+            laws.append({
+                "law_title": norm["law_name"],
+                "article_number": norm["article_number"],
+                "text": (
+                    f"{norm['original_text']}\n"
+                    f"Критерии нарушения: {norm['violation_criteria']}\n"
+                    f"Меры реагирования: {norm['applicable_measures']}"
+                ),
+                "norm_purpose": norm.get("norm_purpose", ""),
+                "violation_criteria": norm.get("violation_criteria", ""),
+                "applicable_measures": norm.get("applicable_measures", ""),
+                "category": "enriched_jsonl",
+                "score": norm.get("score", 0),
+            })
+    except Exception as e:
+        logger.error("RAGLawsService search failed: %s", e, exc_info=True)
+
+    # Also search ChromaDB legislation (if any laws uploaded there)
+    try:
+        rag = RAGService()
+        chroma_laws = rag.search_relevant_laws(query_text, top_k=10)
+        logger.info("search-laws: ChromaDB returned %d laws", len(chroma_laws))
+        seen_keys = {(l.get("law_title", ""), l.get("article_number", "")) for l in laws}
+        for law in chroma_laws:
+            key = (law.get("law_title", ""), law.get("article_number", ""))
             if key not in seen_keys:
                 seen_keys.add(key)
-                laws.append({
-                    "law_title": norm["law_name"],
-                    "article_number": norm["article_number"],
-                    "text": (
-                        f"{norm['original_text']}\n"
-                        f"Критерии нарушения: {norm['violation_criteria']}\n"
-                        f"Меры реагирования: {norm['applicable_measures']}"
-                    ),
-                    "norm_purpose": norm.get("norm_purpose", ""),
-                    "violation_criteria": norm.get("violation_criteria", ""),
-                    "applicable_measures": norm.get("applicable_measures", ""),
-                    "category": "enriched_jsonl",
-                    "score": norm.get("score", 0),
-                })
+                laws.append(law)
     except Exception as e:
-        logger.warning("RAGLawsService search in search-laws failed: %s", e, exc_info=True)
+        logger.warning("ChromaDB search failed (non-fatal): %s", e)
 
-    logger.info("search-laws: total laws before reranking=%d", len(laws))
-
-    # ── AI Reranking: use Gemini to evaluate actual relevance ──────
-    # Embedding similarity gives ~0.83 for all legal texts (useless).
-    # Gemini can understand which norms actually apply to the case.
-    if laws:
-        try:
-            ai = AIService()
-            laws = await ai.rerank_laws(
-                case_description=query_text[:4000],
-                candidate_laws=laws,
-                top_k=12,
-            )
-            logger.info("search-laws: AI reranked to %d results", len(laws))
-        except Exception as e:
-            logger.warning("AI reranking failed (non-fatal): %s", e, exc_info=True)
-    else:
-        logger.warning("search-laws: NO laws found from any source, skipping AI reranking")
-
+    logger.info("search-laws: returning %d total laws", len(laws))
     return [RetrievedLaw(**law) for law in laws]
 
 
