@@ -6,8 +6,9 @@ services:
       POSTGRES_DB: legalassist
       POSTGRES_USER: postgres
       POSTGRES_PASSWORD: postgres
-    ports:
-      - "5432:5432"
+    # SECURITY: Do NOT expose port 5432 publicly — database was hacked!
+    # ports:
+    #   - "5432:5432"
     volumes:
       - pgdata:/var/lib/postgresql/data
     healthcheck:
