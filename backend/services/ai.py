@@ -770,3 +770,131 @@ class AIService:
         except Exception as e:
             logger.error("Gemini _call_llm error: %s", e)
             raise Exception(f"Ошибка Gemini API: {e}")
+
+    # ── AI-powered law reranking ──────────────────────────────────────
+
+    async def rerank_laws(
+        self,
+        case_description: str,
+        candidate_laws: list[dict],
+        top_k: int = 10,
+    ) -> list[dict]:
+        """Use Gemini to rerank candidate laws by relevance to the case.
+
+        Embedding similarity fails for legal texts because all laws share
+        similar vocabulary (~0.83 cosine for everything). This method uses
+        the LLM's understanding to evaluate actual semantic relevance.
+
+        Args:
+            case_description: Full case facts / фабула дела
+            candidate_laws: List of candidate norms from FAISS/ChromaDB
+            top_k: Max results to return
+
+        Returns:
+            Filtered and reranked list with AI-assigned scores (0-100)
+        """
+        if not candidate_laws:
+            return []
+
+        # Build compact representations for each candidate
+        law_entries = []
+        for i, law in enumerate(candidate_laws[:30]):  # Limit to 30 candidates
+            title = law.get("law_title", law.get("law_name", ""))
+            article = law.get("article_number", "")
+            text = law.get("text", law.get("original_text", ""))[:400]
+            vc = law.get("violation_criteria", "")[:200]
+            am = law.get("applicable_measures", "")[:200]
+
+            entry = f"[{i}] {title}, {article}\n"
+            if text:
+                entry += f"Текст: {text}\n"
+            if vc:
+                entry += f"Критерии нарушения: {vc}\n"
+            if am:
+                entry += f"Меры: {am}\n"
+            law_entries.append(entry)
+
+        laws_block = "\n---\n".join(law_entries)
+
+        prompt = f"""Ты — эксперт по законодательству Республики Казахстан. Тебе даны факты уголовного дела и список кандидатных правовых норм.
+
+## Факты дела
+{case_description[:4000]}
+
+## Кандидатные нормы
+{laws_block}
+
+## Задача
+Оцени релевантность КАЖДОЙ нормы к данному делу. Норма релевантна, если:
+- Она регулирует деятельность организации/лица, чьё нарушение привело к преступлению
+- Она устанавливает обязанности, которые были нарушены
+- Она относится к сфере, связанной с обстоятельствами дела
+
+Ответь СТРОГО в формате JSON-массива. Каждый элемент:
+{{"index": <номер нормы>, "score": <0-100>, "reason": "<краткое обоснование>"}}
+
+Где score:
+- 80-100: норма прямо относится к делу
+- 50-79: норма косвенно связана
+- 20-49: слабая связь
+- 0-19: не относится к делу
+
+Включи ТОЛЬКО нормы со score >= 30. Сортируй по убыванию score.
+Ответ — ТОЛЬКО JSON-массив, без комментариев."""
+
+        try:
+            config = genai_types.GenerateContentConfig(
+                temperature=0.1,
+                top_p=0.9,
+                max_output_tokens=4096,
+            )
+
+            response = self._client.models.generate_content(
+                model=self.model_name,
+                contents=prompt,
+                config=config,
+            )
+
+            raw = response.text.strip()
+            # Extract JSON array from response
+            import json
+
+            # Strip markdown code blocks if present
+            raw = re.sub(r'^```(?:json)?\s*\n', '', raw, flags=re.MULTILINE)
+            raw = re.sub(r'\n```\s*$', '', raw, flags=re.MULTILINE)
+            raw = raw.strip()
+
+            rankings = json.loads(raw)
+
+            if not isinstance(rankings, list):
+                logger.warning("rerank_laws: unexpected response format")
+                return candidate_laws[:top_k]
+
+            # Map AI rankings back to original candidate laws
+            reranked = []
+            for item in rankings:
+                idx = item.get("index", -1)
+                ai_score = item.get("score", 0)
+                reason = item.get("reason", "")
+
+                if idx < 0 or idx >= len(candidate_laws) or ai_score < 30:
+                    continue
+
+                law = dict(candidate_laws[idx])
+                law["score"] = round(ai_score / 100.0, 2)  # Normalize to 0-1
+                law["ai_reason"] = reason
+                reranked.append(law)
+
+                if len(reranked) >= top_k:
+                    break
+
+            logger.info(
+                "rerank_laws: %d candidates → %d relevant (AI-filtered)",
+                len(candidate_laws), len(reranked),
+            )
+            return reranked
+
+        except Exception as e:
+            logger.warning("rerank_laws failed, returning FAISS results: %s", e)
+            return candidate_laws[:top_k]
+

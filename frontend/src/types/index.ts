@@ -107,6 +107,7 @@ export interface RetrievedLaw {
   article_number: string;
   category: string;
   score: number;
+  ai_reason?: string;
 }
 
 export interface CitationCheck {

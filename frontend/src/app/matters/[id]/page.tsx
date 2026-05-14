@@ -435,6 +435,12 @@ export default function MatterDetailPage() {
                             <span className={`text-[11px] font-semibold px-2 py-0.5 rounded ml-auto whitespace-nowrap ${pctColor}`}>{pct}%</span>
                           </div>
                           <p className="text-xs text-gray-600 mt-1.5 leading-relaxed whitespace-pre-line line-clamp-4 group-hover:line-clamp-none transition-all">{cleanText.substring(0, 500)}</p>
+                          {law.ai_reason && (
+                            <p className="text-[11px] text-blue-600 mt-1.5 italic flex items-start gap-1">
+                              <BrainCircuit className="w-3 h-3 mt-0.5 flex-shrink-0" />
+                              {law.ai_reason}
+                            </p>
+                          )}
                         </div>
                       </label>
                     );

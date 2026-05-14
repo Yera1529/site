@@ -166,6 +166,7 @@ async def search_laws(
 
     Builds a focused query from: qualification (article of criminal code),
     matter description, custom instructions, and extracted file text.
+    Uses AI (Gemini) to rerank candidates for accurate relevance scoring.
     """
     matter = await get_authorized_matter(data.matter_id, user, db)
 
@@ -216,6 +217,21 @@ async def search_laws(
                 })
     except Exception as e:
         logger.warning("RAGLawsService search in search-laws failed: %s", e)
+
+    # ── AI Reranking: use Gemini to evaluate actual relevance ──────
+    # Embedding similarity gives ~0.83 for all legal texts (useless).
+    # Gemini can understand which norms actually apply to the case.
+    if laws:
+        try:
+            ai = AIService()
+            laws = await ai.rerank_laws(
+                case_description=query_text[:4000],
+                candidate_laws=laws,
+                top_k=12,
+            )
+            logger.info("search-laws: AI reranked to %d results", len(laws))
+        except Exception as e:
+            logger.warning("AI reranking failed (non-fatal): %s", e)
 
     return [RetrievedLaw(**law) for law in laws]
 

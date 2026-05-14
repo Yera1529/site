@@ -34,14 +34,16 @@ class ArticleNode(BaseModel):
 
 
 class RetrievedLaw(BaseModel):
-    text: str
-    law_title: str
-    article_number: str
-    category: str
-    score: float
+    text: str = ""
+    law_title: str = ""
+    article_number: str = ""
+    category: str = ""
+    score: float = 0.0
+    article_title: Optional[str] = None
     norm_purpose: Optional[str] = None
     violation_criteria: Optional[str] = None
     applicable_measures: Optional[str] = None
+    ai_reason: Optional[str] = None
 
 
 class SearchLawsRequest(BaseModel):
