@@ -189,13 +189,19 @@ async def search_laws(
 
         query_text = " ".join(parts) if parts else "представление по ст.200 УПК РК"
 
+    logger.info("search-laws: query_text_len=%d, first_100=%s", len(query_text), query_text[:100])
+
     rag = RAGService()
     laws = rag.search_relevant_laws(query_text, top_k=10)
+    logger.info("search-laws: ChromaDB returned %d laws", len(laws))
 
     # Also search FAISS-indexed enriched JSONL norms
     try:
         rag_laws = RAGLawsService()
+        logger.info("search-laws: FAISS index loaded=%s, records=%d",
+                     rag_laws._index is not None, len(rag_laws._records) if rag_laws._records else 0)
         jsonl_norms = rag_laws.search(query=query_text[:3000], top_k=10)
+        logger.info("search-laws: FAISS returned %d norms", len(jsonl_norms))
         seen_keys = {(l.get("law_title", ""), l.get("article_number", "")) for l in laws}
         for norm in jsonl_norms:
             key = (norm["law_name"], norm["article_number"])
@@ -216,7 +222,9 @@ async def search_laws(
                     "score": norm.get("score", 0),
                 })
     except Exception as e:
-        logger.warning("RAGLawsService search in search-laws failed: %s", e)
+        logger.warning("RAGLawsService search in search-laws failed: %s", e, exc_info=True)
+
+    logger.info("search-laws: total laws before reranking=%d", len(laws))
 
     # ── AI Reranking: use Gemini to evaluate actual relevance ──────
     # Embedding similarity gives ~0.83 for all legal texts (useless).
@@ -231,7 +239,9 @@ async def search_laws(
             )
             logger.info("search-laws: AI reranked to %d results", len(laws))
         except Exception as e:
-            logger.warning("AI reranking failed (non-fatal): %s", e)
+            logger.warning("AI reranking failed (non-fatal): %s", e, exc_info=True)
+    else:
+        logger.warning("search-laws: NO laws found from any source, skipping AI reranking")
 
     return [RetrievedLaw(**law) for law in laws]
 

@@ -30,8 +30,8 @@ NORM_TYPE_BOOST = {
     "Управомочивающая": 1.00,
 }
 
-# Minimum cosine similarity to include in results (filters out clearly irrelevant norms)
-MIN_SCORE_THRESHOLD = 0.35
+# Minimum cosine similarity - set very low since AI reranking handles relevance filtering
+MIN_SCORE_THRESHOLD = 0.10
 
 # Default JSONL file paths (checked in order)
 _JSONL_CANDIDATES = [
