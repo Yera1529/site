@@ -332,16 +332,15 @@ class RAGLawsService:
     ) -> list[dict]:
         """Search for relevant legal norms given a case description.
 
-        Enhanced multi-strategy search:
-          1. Expanded query for obligation-oriented matching
-          2. Original query for direct factual matching
-          3. Text-match bonus for exact keyword hits
-          4. Norm-type boosting (internal ranking only)
-          5. Minimum score threshold to filter irrelevant results
-          6. Balanced retrieval ensuring violation/remedy diversity
+        Hybrid search strategy:
+          1. FAISS embedding retrieval for broad recall (top 100 candidates)
+          2. BM25 keyword scoring as PRIMARY ranking signal
+          3. Embedding score as secondary signal (tiebreaker)
+          4. Norm-type boosting for binding/competence norms
 
-        Score output: raw cosine similarity (0.0–1.0) for frontend display.
-        Boosts are applied internally for ranking but stripped before output.
+        BM25 keyword scoring is critical because embedding similarity (~0.83)
+        cannot distinguish between legal texts. BM25 correctly identifies
+        documents containing actual query terms (кража, хищение, имущество).
 
         Args:
             query: Case description / фабула дела
@@ -349,79 +348,69 @@ class RAGLawsService:
             organ_filter: Optional organization type to filter by
 
         Returns:
-            List of structured norm objects with fields:
-              law_name, article_number, original_text,
-              violation_criteria, applicable_measures, score (0-1)
+            List of structured norm objects with score reflecting relevance
         """
         if not self._index or not self._records:
+            logger.warning("RAGLawsService.search: no index or records")
             return []
 
-        # 1. Multi-query strategy: search with both expanded and original queries
-        expanded_query = self._expand_query(query)
+        import re as _re
 
+        # ── Step 1: Extract key terms from query for BM25 ──────────────
+        q_lower = query.lower()
+
+        # Extract article numbers (e.g. "ст.188", "статья 188")
+        article_nums = _re.findall(r'ст(?:атья|\.)\s*(\d+)', q_lower)
+
+        # Extract meaningful keywords (4+ chars, skip stop words)
+        STOP_WORDS = {
+            'который', 'которая', 'которое', 'которые', 'также', 'было',
+            'были', 'была', 'этого', 'этой', 'этих', 'после', 'между',
+            'через', 'более', 'менее', 'около', 'время', 'период',
+            'данный', 'данная', 'данного', 'данной', 'данных', 'свой',
+            'своей', 'своих', 'своего', 'часов', 'числа', 'году', 'года',
+            'дело', 'дела', 'лицо', 'лица', 'что', 'для', 'при',
+            'него', 'нему', 'него', 'материалы', 'фабула', 'указания',
+        }
+        query_words = [
+            w for w in _re.findall(r'[а-яёa-z]{4,}', q_lower)
+            if w not in STOP_WORDS
+        ]
+        # Deduplicate while preserving order
+        seen_words = set()
+        unique_words = []
+        for w in query_words:
+            if w not in seen_words:
+                seen_words.add(w)
+                unique_words.append(w)
+        query_words = unique_words[:50]  # Limit for performance
+
+        logger.info("RAGLawsService.search: query_len=%d, keywords=%d, articles=%s",
+                     len(query), len(query_words), article_nums)
+
+        # ── Step 2: FAISS embedding retrieval (broad recall) ───────────
         model = self._get_embed_model()
         is_e5 = getattr(self, "_is_e5", False)
 
-        # Encode expanded query
-        q_text_expanded = f"query: {expanded_query}" if is_e5 else expanded_query
-        q_vec_expanded = model.encode(
-            [q_text_expanded], normalize_embeddings=True, show_progress_bar=False
+        # Single query embedding (no expansion overhead)
+        q_text = f"query: {query[:2000]}" if is_e5 else query[:2000]
+        q_vec = model.encode(
+            [q_text], normalize_embeddings=True, show_progress_bar=False
         )
-        q_vec_expanded = np.array(q_vec_expanded, dtype=np.float32)
+        q_vec = np.array(q_vec, dtype=np.float32)
 
-        # Encode original query (for direct fact matching)
-        q_text_original = f"query: {query}" if is_e5 else query
-        q_vec_original = model.encode(
-            [q_text_original], normalize_embeddings=True, show_progress_bar=False
-        )
-        q_vec_original = np.array(q_vec_original, dtype=np.float32)
+        # Fetch broad candidate set
+        fetch_k = min(max(top_k * 10, 100), self._index.ntotal)
+        faiss_scores, faiss_indices = self._index.search(q_vec, fetch_k)
 
-        # 2. FAISS search with both queries
-        fetch_k = min(max(top_k * 6, 40), self._index.ntotal)
-
-        scores_exp, indices_exp = self._index.search(q_vec_expanded, fetch_k)
-        scores_orig, indices_orig = self._index.search(q_vec_original, fetch_k)
-
-        # 3. Merge results — track raw cosine score separately from ranking score
-        # raw_scores: actual cosine similarity for display (0-1)
-        # rank_scores: boosted scores used only for internal ranking
-        candidate_raw: dict[int, float] = {}   # idx -> best raw cosine score
-        candidate_rank: dict[int, float] = {}  # idx -> boosted ranking score
-
-        for score, idx in zip(scores_exp[0], indices_exp[0]):
-            if idx < 0 or idx >= len(self._records):
-                continue
-            idx_int = int(idx)
-            raw = float(score)  # cosine similarity (inner product on normalized vecs)
-            candidate_raw[idx_int] = raw
-            candidate_rank[idx_int] = raw
-
-        for score, idx in zip(scores_orig[0], indices_orig[0]):
-            if idx < 0 or idx >= len(self._records):
-                continue
-            idx_int = int(idx)
-            raw = float(score)
-            # Keep best raw score
-            candidate_raw[idx_int] = max(candidate_raw.get(idx_int, 0), raw)
-            # Small ranking bonus for appearing in both searches
-            if idx_int in candidate_rank:
-                candidate_rank[idx_int] = max(candidate_rank[idx_int], raw) + 0.02
-            else:
-                candidate_rank[idx_int] = raw
-
-        # 4. Build candidate list with boosting for ranking, raw score for display
-        query_lower = query.lower()
-        query_keywords = set(w for w in query_lower.split() if len(w) > 3)
-
+        # ── Step 3: BM25 keyword scoring + hybrid ranking ──────────────
         candidates = []
-        for idx in candidate_raw:
-            raw_score = candidate_raw[idx]
-
-            # Skip results below minimum threshold
-            if raw_score < MIN_SCORE_THRESHOLD:
+        for emb_score, idx in zip(faiss_scores[0], faiss_indices[0]):
+            if idx < 0 or idx >= len(self._records):
                 continue
 
-            rec = self._records[idx]
+            rec = self._records[int(idx)]
+            raw_emb = float(emb_score)
 
             # Organ filter
             if organ_filter:
@@ -432,21 +421,49 @@ class RAGLawsService:
                 if not self._organ_matches(organ, organ_filter):
                     continue
 
-            # Norm type boosting (for ranking only)
-            norm_type = rec.get("norm_type", "")
-            boost = NORM_TYPE_BOOST.get(norm_type, 1.0)
-
-            # Text-match bonus: reward records whose text contains query keywords
-            text_for_match = (
+            # Build searchable text from record
+            rec_text = (
                 rec.get("violation_criteria", "") + " " +
                 rec.get("original_text", "") + " " +
-                rec.get("applicable_measures", "")
+                rec.get("applicable_measures", "") + " " +
+                rec.get("law_name", "") + " " +
+                rec.get("article_number", "") + " " +
+                (rec.get("norm_purpose", "") or "")
             ).lower()
-            keyword_hits = sum(1 for kw in query_keywords if kw in text_for_match)
-            text_bonus = min(keyword_hits * 0.02, 0.10)  # Cap at 0.10
 
-            # Ranking score: base + boost + bonus (for sorting only)
-            rank_score = candidate_rank[idx] * boost + text_bonus
+            # ── BM25-style keyword score ──
+            # Count how many query keywords appear in this record
+            keyword_hits = 0
+            for kw in query_words:
+                if kw in rec_text:
+                    keyword_hits += 1
+                    # Bonus for longer keywords (more specific)
+                    if len(kw) >= 6:
+                        keyword_hits += 0.5
+
+            # Normalize keyword score (0-1 range)
+            bm25_score = min(keyword_hits / max(len(query_words) * 0.3, 1), 1.0)
+
+            # ── Article number match bonus ──
+            article_bonus = 0.0
+            for art_num in article_nums:
+                if f"статья {art_num}" in rec_text or f"ст. {art_num}" in rec_text or f"ст.{art_num}" in rec_text:
+                    article_bonus = 0.3  # Strong bonus for matching article
+                    break
+
+            # ── Norm type boost ──
+            norm_type = rec.get("norm_type", "")
+            type_boost = NORM_TYPE_BOOST.get(norm_type, 1.0)
+
+            # ── Hybrid score: BM25 primary, embedding secondary ──
+            # BM25 weight: 0.6, Embedding weight: 0.2, Article: 0.3
+            hybrid_score = (bm25_score * 0.6 + raw_emb * 0.2 + article_bonus) * type_boost
+
+            # Display score: blend of BM25 and embedding for meaningful %
+            display_score = min(bm25_score * 0.5 + raw_emb * 0.3 + article_bonus * 0.5, 1.0)
+
+            if hybrid_score < 0.05 and not article_bonus:
+                continue
 
             candidates.append({
                 "law_name": rec.get("law_name", ""),
@@ -457,20 +474,18 @@ class RAGLawsService:
                 "norm_type": norm_type,
                 "norm_purpose": rec.get("norm_purpose", ""),
                 "organ": (rec.get("subject_competence", {}) or {}).get("organ", ""),
-                "score": round(raw_score, 4),       # Display score: raw cosine (0-1)
-                "_rank_score": round(rank_score, 4),  # Internal ranking only
+                "score": round(display_score, 4),
+                "_hybrid": round(hybrid_score, 4),
+                "_bm25": round(bm25_score, 4),
+                "_emb": round(raw_emb, 4),
+                "_kw_hits": keyword_hits,
             })
 
-        # 5. Sort by RANKING score, deduplicate by law+article
-        candidates.sort(key=lambda x: x["_rank_score"], reverse=True)
+        # ── Step 4: Sort by hybrid score, deduplicate ──────────────────
+        candidates.sort(key=lambda x: x["_hybrid"], reverse=True)
+
         seen = set()
         results = []
-        violation_count = 0
-        remedy_count = 0
-        min_violation = max(1, top_k // 2)
-        min_remedy = max(1, top_k // 3)
-
-        # Track law diversity — avoid too many results from same law
         law_counts: dict[str, int] = {}
         max_per_law = max(3, top_k // 2)
 
@@ -486,32 +501,23 @@ class RAGLawsService:
             if law_counts[law_name] > max_per_law and len(results) >= top_k // 2:
                 continue
 
-            purpose = c.get("norm_purpose", "")
-            if len(results) >= top_k:
-                if purpose == "violation" and violation_count < min_violation:
-                    pass
-                elif purpose == "remedy" and remedy_count < min_remedy:
-                    pass
-                else:
-                    continue
-
-            # Remove internal ranking score before returning
+            # Remove internal scores before returning
             result = {k: v for k, v in c.items() if not k.startswith("_")}
             results.append(result)
-            if purpose in ("violation", "both"):
-                violation_count += 1
-            if purpose in ("remedy", "both"):
-                remedy_count += 1
 
-            if len(results) >= top_k + 3:  # Hard cap
+            if len(results) >= top_k:
                 break
 
-        logger.info(
-            "RAGLawsService.search: query_len=%d, candidates=%d (above threshold), returned=%d, score_range=%.3f-%.3f",
-            len(query), len(candidates), len(results),
-            results[-1]["score"] if results else 0,
-            results[0]["score"] if results else 0,
-        )
+        # Log top results for debugging
+        if results:
+            top3 = [(r["law_name"][:30], r["article_number"], r["score"]) for r in results[:3]]
+            logger.info(
+                "RAGLawsService.search: %d candidates → %d results. Top3: %s",
+                len(candidates), len(results), top3
+            )
+        else:
+            logger.warning("RAGLawsService.search: 0 results for query_len=%d", len(query))
+
         return results
 
     @staticmethod
