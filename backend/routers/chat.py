@@ -219,19 +219,10 @@ async def search_laws(
     except Exception as e:
         logger.error("RAGLawsService search failed: %s", e, exc_info=True)
 
-    # Also search ChromaDB legislation (if any laws uploaded there)
-    try:
-        rag = RAGService()
-        chroma_laws = rag.search_relevant_laws(query_text, top_k=10)
-        logger.info("search-laws: ChromaDB returned %d laws", len(chroma_laws))
-        seen_keys = {(l.get("law_title", ""), l.get("article_number", "")) for l in laws}
-        for law in chroma_laws:
-            key = (law.get("law_title", ""), law.get("article_number", ""))
-            if key not in seen_keys:
-                seen_keys.add(key)
-                laws.append(law)
-    except Exception as e:
-        logger.warning("ChromaDB search failed (non-fatal): %s", e)
+    # ChromaDB legislation search disabled — it contains irrelevant
+    # podactov (transport, housing, mass-media, banking laws) that
+    # drown out relevant FAISS codex results. FAISS has 21,462 codex norms.
+    # Re-enable when ChromaDB is populated with relevant laws only.
 
     logger.info("search-laws: returning %d total laws", len(laws))
     return [RetrievedLaw(**law) for law in laws]
