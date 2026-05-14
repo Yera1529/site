@@ -24,6 +24,8 @@ services:
         condition: service_healthy
     ports:
       - "8000:8000"
+    command: >
+      sh -c "python init_tables.py && uvicorn main:app --host 0.0.0.0 --port 8000 --reload"
     environment:
       DATABASE_URL: postgresql+asyncpg://postgres:postgres@db:5432/legalassist
       SECRET_KEY: change-me-to-a-random-secret-key-in-production
@@ -32,11 +34,17 @@ services:
       EMBEDDING_MODEL: intfloat/multilingual-e5-base
       STORAGE_DIR: /app/storage
       MAX_UPLOAD_BYTES: "52428800"
-      CORS_ORIGINS: http://localhost:3000,http://127.0.0.1:3000
+      CORS_ORIGINS: http://localhost:3000,http://127.0.0.1:3000,http://109.196.101.168:3000
+      VERTEX_AI_PROJECT: "gen-lang-client-0615048966"
+      VERTEX_AI_LOCATION: "us-central1"
+      GOOGLE_APPLICATION_CREDENTIALS: /app/credentials.json
     volumes:
       - ./backend:/app
       - backend_storage:/app/storage
       - chroma_data:/app/storage/chroma_db
+      - ./gen-lang-client-0615048966-f1a99d998ddf.json:/app/credentials.json:ro
+      - ./enriched_laws_200upk.jsonl:/app/enriched_laws_200upk.jsonl:ro
+      - ./unified_laws_200upk.jsonl:/app/unified_laws_200upk.jsonl:ro
     extra_hosts:
       - "host.docker.internal:host-gateway"
 
@@ -48,7 +56,7 @@ services:
     ports:
       - "3000:3000"
     environment:
-      NEXT_PUBLIC_API_URL: http://localhost:8000
+      NEXT_PUBLIC_API_URL: http://109.196.101.168:8000
       HOSTNAME: "0.0.0.0"
     volumes:
       - ./frontend/src:/app/src
