@@ -405,10 +405,10 @@ export default function MatterDetailPage() {
                   {retrievedLaws.length === 0 ? (
                     <p className="p-4 text-xs text-gray-400 text-center">Нормативные акты не найдены в базе законодательства. Загрузите законы в разделе «Законодательство».</p>
                   ) : retrievedLaws.map((law, i) => {
-                    // Realistic relevance percentage: calibrated for FAISS inner-product scores
+                    // Relevance percentage: backend now returns raw cosine similarity (0-1)
                     const rawScore = typeof law.score === 'number' ? law.score : 0;
-                    const pct = Math.round(Math.max(5, Math.min(95, rawScore * 65 + 10)));
-                    const pctColor = pct >= 70 ? "text-green-600 bg-green-50" : pct >= 45 ? "text-amber-600 bg-amber-50" : "text-gray-500 bg-gray-100";
+                    const pct = Math.round(Math.max(1, Math.min(99, rawScore * 100)));
+                    const pctColor = pct >= 70 ? "text-green-600 bg-green-50" : pct >= 50 ? "text-blue-600 bg-blue-50" : pct >= 35 ? "text-amber-600 bg-amber-50" : "text-gray-500 bg-gray-100";
                     // Strip markdown formatting from text
                     const cleanText = law.text
                       .replace(/\*\*([^*]+)\*\*/g, '$1')
