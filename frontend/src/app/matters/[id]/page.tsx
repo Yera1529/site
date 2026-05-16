@@ -65,6 +65,8 @@ export default function MatterDetailPage() {
   const [selectedLaws, setSelectedLaws] = useState<Set<number>>(new Set());
   const [searchingLaws, setSearchingLaws] = useState(false);
   const [citationCheck, setCitationCheck] = useState<CitationCheck | null>(null);
+  const [normUsage, setNormUsage] = useState<{ all_used: boolean; used: { law: string; article: string }[]; unused: { law: string; article: string }[] } | null>(null);
+  const [addresseeCheck, setAddresseeCheck] = useState<{ ok: boolean; reason: string } | null>(null);
   const [currentRepId, setCurrentRepId] = useState<string | null>(null);
   const [editorSaving, setEditorSaving] = useState(false);
   const [editorLastSaved, setEditorLastSaved] = useState("");
@@ -218,11 +220,15 @@ export default function MatterDetailPage() {
         representation_id?: string;
         validation?: { ok: boolean; missing: string[]; present: string[] };
         citation_check?: CitationCheck;
+        norm_usage?: { all_used: boolean; used: { law: string; article: string }[]; unused: { law: string; article: string }[] };
+        addressee_check?: { ok: boolean; reason: string };
       };
       setEditorContent(res.content);
       if (res.representation_id) setCurrentRepId(res.representation_id);
       if (res.validation) setValidationResult(res.validation);
       if (res.citation_check) setCitationCheck(res.citation_check);
+      if (res.norm_usage) setNormUsage(res.norm_usage);
+      if (res.addressee_check) setAddresseeCheck(res.addressee_check);
       await refreshMessages();
     } catch (e: any) {
       setGenError(e.message);
@@ -590,6 +596,42 @@ export default function MatterDetailPage() {
                   <div className="flex items-start gap-2 px-4 py-2.5 rounded-lg text-xs bg-amber-50 border border-amber-200 text-amber-800">
                     <AlertTriangle className="w-4 h-4 text-amber-500 flex-shrink-0 mt-0.5" />
                     <p>Непроверенные ссылки (отсутствуют в базе): ст. {citationCheck.unverified.join(", ")}. Проверьте вручную или загрузите соответствующий закон.</p>
+                  </div>
+                )}
+
+                {/* Norm usage check */}
+                {normUsage && !generating && (
+                  <div className={`flex items-start gap-2 px-4 py-2.5 rounded-lg text-xs ${normUsage.all_used ? "bg-green-50 border border-green-200 text-green-800" : "bg-red-50 border border-red-200 text-red-800"}`}>
+                    {normUsage.all_used ? (
+                      <CheckCircle2 className="w-4 h-4 text-green-500 flex-shrink-0 mt-0.5" />
+                    ) : (
+                      <AlertTriangle className="w-4 h-4 text-red-500 flex-shrink-0 mt-0.5" />
+                    )}
+                    <div>
+                      <p className="font-medium">
+                        {normUsage.all_used
+                          ? `Все ${normUsage.used.length} выбранных норм использованы в документе`
+                          : `${normUsage.unused.length} из ${normUsage.used.length + normUsage.unused.length} норм НЕ использованы в документе!`}
+                      </p>
+                      {!normUsage.all_used && normUsage.unused.length > 0 && (
+                        <ul className="mt-1 space-y-0.5">
+                          {normUsage.unused.map((n, i) => (
+                            <li key={i}>❌ {n.law} — {n.article}</li>
+                          ))}
+                        </ul>
+                      )}
+                    </div>
+                  </div>
+                )}
+
+                {/* Addressee check */}
+                {addresseeCheck && !addresseeCheck.ok && !generating && (
+                  <div className="flex items-start gap-2 px-4 py-2.5 rounded-lg text-xs bg-red-50 border border-red-200 text-red-800">
+                    <AlertTriangle className="w-4 h-4 text-red-500 flex-shrink-0 mt-0.5" />
+                    <div>
+                      <p className="font-medium">⚠️ Неправильный адресат</p>
+                      <p className="mt-0.5">{addresseeCheck.reason}</p>
+                    </div>
                   </div>
                 )}
 

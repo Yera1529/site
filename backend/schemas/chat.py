@@ -63,6 +63,22 @@ class CitationCheckResponse(BaseModel):
     unverified: List[str]
 
 
+class NormUsageItem(BaseModel):
+    law: str
+    article: str
+
+
+class NormUsageReport(BaseModel):
+    all_used: bool
+    used: List[NormUsageItem] = []
+    unused: List[NormUsageItem] = []
+
+
+class AddresseeCheck(BaseModel):
+    ok: bool
+    reason: str = ""
+
+
 class GenerateDocumentResponse(BaseModel):
     content: str
     template_name: Optional[str] = None
@@ -70,3 +86,6 @@ class GenerateDocumentResponse(BaseModel):
     validation: Optional[ValidationReport] = None
     retrieved_laws: Optional[List[RetrievedLawResponse]] = None
     citation_check: Optional[CitationCheckResponse] = None
+    norm_usage: Optional[NormUsageReport] = None
+    addressee_check: Optional[AddresseeCheck] = None
+

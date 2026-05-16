@@ -23,11 +23,14 @@ from schemas.chat import (
     ValidationReport,
     CitationCheckResponse,
     RetrievedLawResponse,
+    NormUsageReport,
+    NormUsageItem,
+    AddresseeCheck,
 )
 from schemas.legislation import SearchLawsRequest, RetrievedLaw
 from routers.auth import get_current_user
 from routers.matters import get_authorized_matter
-from services.ai import AIService, validate_representation, validate_law_citations
+from services.ai import AIService, validate_representation, validate_law_citations, validate_norm_usage, validate_addressee
 from services.rag import RAGService
 from services.rag_laws import RAGLawsService
 from services.document import DocumentService
@@ -380,6 +383,61 @@ async def generate_document(
     validation = validate_representation(generated)
     citation_check = validate_law_citations(generated, retrieved_laws)
 
+    # ── Norm usage validation: check all selected norms are cited ──
+    norm_check = validate_norm_usage(generated, retrieved_laws)
+    logger.info(
+        "generate_document: norm_check all_used=%s used=%d unused=%d",
+        norm_check["all_used"], len(norm_check["used"]), len(norm_check["unused"])
+    )
+
+    # Auto-retry if norms are not cited
+    if not norm_check["all_used"] and norm_check["unused"]:
+        unused_list = "\n".join(
+            f"- {n['law']} {n['article']}" for n in norm_check["unused"]
+        )
+        logger.warning(
+            "generate_document: %d norms not cited, retrying with explicit fix prompt",
+            len(norm_check["unused"])
+        )
+        try:
+            fix_prompt = (
+                f"В документе НЕ использованы следующие нормы, "
+                f"которые ОБЯЗАТЕЛЬНО должны быть процитированы:\n{unused_list}\n\n"
+                f"Добавь для КАЖДОЙ из них:\n"
+                f"1. Конкретное нарушение в основной части документа со ссылкой на эту статью\n"
+                f"2. Конкретную меру в разделе ПРЕДЛАГАЮ со ссылкой на эту норму\n\n"
+                f"НЕ удаляй существующие нарушения и меры — ДОБАВЬ новые.\n"
+                f"Верни ПОЛНЫЙ документ (все разделы) в HTML.\n\n"
+                f"Исходный документ:\n{generated}"
+            )
+            system_fix = (
+                "Ты — юридический редактор. Дополни представление по ст.200 УПК РК "
+                "недостающими нормами. Сохрани весь существующий текст и структуру."
+            )
+            generated_v2 = await ai._call_llm(system_fix, fix_prompt)
+            if generated_v2 and len(generated_v2) > len(generated) * 0.5:
+                norm_check_v2 = validate_norm_usage(generated_v2, retrieved_laws)
+                original_unused = len(norm_check["unused"])
+                if len(norm_check_v2["unused"]) < original_unused:
+                    generated = generated_v2
+                    norm_check = norm_check_v2
+                    validation = validate_representation(generated)
+                    citation_check = validate_law_citations(generated, retrieved_laws)
+                    logger.info(
+                        "generate_document: retry improved — unused norms: %d → %d",
+                        original_unused, len(norm_check_v2["unused"])
+                    )
+        except Exception as e:
+            logger.warning("generate_document: norm-fix retry failed: %s", e)
+
+    # ── Addressee validation ──
+    addressee_check = validate_addressee(generated)
+    if not addressee_check["ok"]:
+        logger.warning(
+            "generate_document: BAD ADDRESSEE — %s", addressee_check["reason"]
+        )
+
+    # Legacy retry for missing sections (kept for backward compat)
     if not validation["ok"] and validation["missing"]:
         refined_query = (
             f"нарушения обязанности ответственность меры устранение "
@@ -413,6 +471,14 @@ async def generate_document(
         if data.template_name
         else f"Представление — {matter.name}"
     )
+
+    # Build extended validation result with norm and addressee info
+    extended_validation = {
+        **validation,
+        "norm_usage": norm_check,
+        "addressee": addressee_check,
+    }
+
     rep = Representation(
         matter_id=data.matter_id,
         template_id=tmpl.id if tmpl else None,
@@ -423,7 +489,7 @@ async def generate_document(
             law.get("law_title", "") + " ст." + law.get("article_number", "")
             for law in retrieved_laws if law.get("article_number")
         ]),
-        validation_result=json.dumps(validation),
+        validation_result=json.dumps(extended_validation),
         created_by=user.id,
     )
     db.add(rep)
@@ -448,6 +514,12 @@ async def generate_document(
             for law in retrieved_laws
         ],
         citation_check=CitationCheckResponse(**citation_check),
+        norm_usage=NormUsageReport(
+            all_used=norm_check["all_used"],
+            used=[NormUsageItem(**n) for n in norm_check["used"]],
+            unused=[NormUsageItem(**n) for n in norm_check["unused"]],
+        ),
+        addressee_check=AddresseeCheck(**addressee_check),
     )
 
 
