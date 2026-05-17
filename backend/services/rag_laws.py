@@ -587,6 +587,117 @@ class RAGLawsService:
 
         return False
 
+    # ── Multi-Query Retrieval ───────────────────────────────────────────
+
+    def search_multi_query(
+        self,
+        facts: str,
+        top_k: int = 15,
+        organ_filter: str | None = None,
+    ) -> list[dict]:
+        """Decompose case facts into focused sub-queries and merge results.
+
+        Problem: a single long query dilutes the semantic signal — FAISS returns
+        'everything about everything'. Multi-query breaks the case into:
+          1. Cause/condition analysis query
+          2. Crime-type → duty obligation queries
+          3. Organization-specific duty queries
+
+        Results are merged by (law_name, article_number) taking best score.
+        """
+        import re as _re
+
+        if not self._index or not self._records:
+            return []
+
+        queries = []
+
+        # 1. Primary query: causes and conditions (trimmed for focus)
+        queries.append(
+            f"причины условия способствовавшие преступлению {facts[:1000]}"
+        )
+
+        # 2. Crime-type queries via duty mapping
+        q_lower = facts.lower()
+        CRIME_QUERY_MAP = {
+            r'краж|хищен|похит|украл|тайно': [
+                'охрана имущества собственности обязанность обеспечить сохранность',
+                'освещение территории двор безопасность жилой фонд содержание',
+            ],
+            r'проникновен|взлом|вскры': [
+                'охрана помещения обязанность обеспечить физическую защиту',
+            ],
+            r'убийств|смерт|погиб': [
+                'безопасность жизни здоровья граждан обязанность защита',
+            ],
+            r'дтп|аварий|дорож|столкновен': [
+                'содержание дорог обязанность обеспечить безопасность движения',
+                'дорожная разметка освещение знаки ограждение',
+            ],
+            r'наркот|психотроп': [
+                'оборот наркотических средств контроль обязанность',
+            ],
+            r'пожар|возгоран': [
+                'пожарная безопасность противопожарные обязанность',
+            ],
+            r'несовершеннолетн|подрост|ребен|дет': [
+                'защита несовершеннолетних обязанность надзор опека',
+            ],
+            r'двор|подъезд|придомов|жилищ': [
+                'содержание жилого фонда обязанность КСК управляющая компания',
+            ],
+            r'труд|работник|охрана\s*труда': [
+                'охрана труда безопасные условия обязанность работодателя',
+            ],
+            r'суицид|самоубийств': [
+                'профилактика суицидов обязанность психологическая помощь',
+            ],
+        }
+        matched = 0
+        for pattern, duty_queries in CRIME_QUERY_MAP.items():
+            if _re.search(pattern, q_lower):
+                queries.extend(duty_queries)
+                matched += 1
+                if matched >= 3:
+                    break
+
+        # 3. Organization-specific queries (extract org names from facts)
+        org_patterns = [
+            (r'КСК|кондоминиум', 'обязанности КСК содержание жилого фонда'),
+            (r'ТОО|ИП|предприят', 'обязанности работодателя предприятия'),
+            (r'школ|колледж|университет', 'обязанности образовательной организации'),
+            (r'больниц|поликлиник|медицин', 'обязанности медицинской организации'),
+            (r'акимат|аким\b', 'обязанности местного исполнительного органа акимата'),
+            (r'банк|финанс', 'обязанности финансовой организации банка'),
+        ]
+        for pattern, org_query in org_patterns:
+            if _re.search(pattern, q_lower, _re.IGNORECASE):
+                queries.append(org_query)
+
+        logger.info(
+            "search_multi_query: decomposed into %d sub-queries from facts_len=%d",
+            len(queries), len(facts),
+        )
+
+        # Run each sub-query and merge results
+        all_candidates: dict[tuple[str, str], dict] = {}
+        for q in queries:
+            results = self.search(query=q[:3000], top_k=top_k, organ_filter=organ_filter)
+            for r in results:
+                key = (r["law_name"], r["article_number"])
+                if key not in all_candidates or r["score"] > all_candidates[key]["score"]:
+                    all_candidates[key] = r
+
+        # Sort by score descending and return top_k
+        merged = sorted(all_candidates.values(), key=lambda x: x["score"], reverse=True)
+        result = merged[:top_k]
+
+        logger.info(
+            "search_multi_query: merged %d unique norms from %d queries, returning top %d",
+            len(all_candidates), len(queries), len(result),
+        )
+        return result
+
     # ── Utility ─────────────────────────────────────────────────────────
 
     def get_stats(self) -> dict:

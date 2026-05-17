@@ -494,6 +494,9 @@ class AIService:
         custom_instructions: str,
         additional_instructions: str,
         retrieved_laws: list[dict] | None = None,
+        structured_violations: list[dict] | None = None,
+        addressee_override: str | None = None,
+        norm_violation_bindings: dict[str, int] | None = None,
     ) -> tuple[str, str]:
         """
         Строит системный и пользовательский промпты для генерации представления
@@ -680,6 +683,53 @@ class AIService:
                 f"\n\n## Факты текущего дела (ЕДИНСТВЕННЫЙ источник реквизитов)\n"
                 f"{facts[:24000]}"
             )
+
+        # ── Structured violations from user (Phase 3) ──
+        if structured_violations:
+            sv_section = (
+                "\n\n═══ ПРИЧИНЫ И УСЛОВИЯ (УКАЗАНЫ СЛЕДОВАТЕЛЕМ — ОБЯЗАТЕЛЬНЫ) ═══\n"
+                "Следователь ЛИЧНО указал конкретные нарушения, которые привели к преступлению.\n"
+                "Используй ЭТИ нарушения как ОСНОВУ раздела 'Выявленные нарушения'.\n"
+                "НЕ придумывай другие нарушения — используй ТОЛЬКО указанные ниже:\n\n"
+            )
+            for idx, v in enumerate(structured_violations, 1):
+                sv_section += f"Нарушение {idx}:\n"
+                sv_section += f"  Описание: {v.get('description', '')}\n"
+                if v.get('responsible'):
+                    sv_section += f"  Ответственный: {v['responsible']}\n"
+                if v.get('link_to_crime'):
+                    sv_section += f"  Связь с преступлением: {v['link_to_crime']}\n"
+                sv_section += "\n"
+            user_parts.append(sv_section)
+
+        # ── Addressee override from user ──
+        if addressee_override:
+            user_parts.append(
+                f"\n\n═══ АДРЕСАТ (УКАЗАН СЛЕДОВАТЕЛЕМ — ОБЯЗАТЕЛЬНО) ═══\n"
+                f"Следователь указал адресата представления: {addressee_override}\n"
+                f"Используй ЭТОГО адресата в шапке документа. НЕ меняй его.\n"
+            )
+
+        # ── Norm ↔ Violation bindings from user ──
+        if norm_violation_bindings and structured_violations and retrieved_laws:
+            bind_section = (
+                "\n\n═══ ПРИВЯЗКА НОРМ К НАРУШЕНИЯМ (УКАЗАНА СЛЕДОВАТЕЛЕМ) ═══\n"
+                "Следователь привязал конкретные нормы к конкретным нарушениям:\n\n"
+            )
+            for law_idx_str, viol_idx in norm_violation_bindings.items():
+                law_idx = int(law_idx_str)
+                if law_idx < len(retrieved_laws) and viol_idx < len(structured_violations):
+                    law = retrieved_laws[law_idx]
+                    viol = structured_violations[viol_idx]
+                    bind_section += (
+                        f"  Нарушение: {viol.get('description', '')} → "
+                        f"Норма: {law.get('law_title', '')} ст.{law.get('article_number', '')}\n"
+                    )
+            bind_section += (
+                "\nИспользуй ИМЕННО эти пары при описании нарушений в документе.\n"
+            )
+            user_parts.append(bind_section)
+
         if additional_instructions:
             user_parts.append(f"\n\n## Дополнительные указания следователя\n{additional_instructions}")
 
@@ -784,6 +834,10 @@ class AIService:
         enable_thinking: Optional[bool] = None,
         # template аргумент оставлен для обратной совместимости вызовов, не используется
         template: str = "",
+        # Phase 3: user-specified violations and addressee
+        structured_violations: list[dict] | None = None,
+        addressee_override: str | None = None,
+        norm_violation_bindings: dict[str, int] | None = None,
     ) -> str:
         """Generate a representation document without template injection.
         Rules-based generation: the REPRESENTATION_RULES constant defines all
@@ -796,6 +850,9 @@ class AIService:
             custom_instructions=custom_instructions,
             additional_instructions=additional_instructions,
             retrieved_laws=retrieved_laws,
+            structured_violations=structured_violations,
+            addressee_override=addressee_override,
+            norm_violation_bindings=norm_violation_bindings,
         )
         return await self._call_llm(system_prompt, user_prompt, enable_thinking)
 

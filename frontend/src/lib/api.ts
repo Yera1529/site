@@ -155,7 +155,15 @@ export const api = {
   },
 
   // Document Generation
-  generateDocument: (matterId: string, templateName: string, additionalInstructions?: string, selectedLaws?: RetrievedLaw[]) =>
+  generateDocument: (
+    matterId: string,
+    templateName: string,
+    additionalInstructions?: string,
+    selectedLaws?: RetrievedLaw[],
+    structuredViolations?: { description: string; responsible: string; link_to_crime: string }[],
+    addresseeOverride?: string,
+    normViolationBindings?: Record<string, number>,
+  ) =>
     request("/api/generate-document", {
       method: "POST",
       body: JSON.stringify({
@@ -163,6 +171,9 @@ export const api = {
         template_name: templateName,
         additional_instructions: additionalInstructions || "",
         selected_laws: selectedLaws || null,
+        structured_violations: structuredViolations || null,
+        addressee_override: addresseeOverride || null,
+        norm_violation_bindings: normViolationBindings || null,
       }),
     }),
 

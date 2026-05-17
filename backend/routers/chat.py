@@ -197,12 +197,13 @@ async def search_laws(
     laws: list[dict] = []
 
     # Search FAISS-indexed enriched JSONL norms (primary source, 21k+ records)
+    # Uses multi-query decomposition for better recall of relevant norms
     try:
         rag_laws = RAGLawsService()
         logger.info("search-laws: FAISS index=%s records=%d",
                      rag_laws._index is not None,
                      len(rag_laws._records) if rag_laws._records else 0)
-        jsonl_norms = rag_laws.search(query=query_text[:3000], top_k=15)
+        jsonl_norms = rag_laws.search_multi_query(facts=query_text[:3000], top_k=15)
         logger.info("search-laws: FAISS returned %d norms", len(jsonl_norms))
         for norm in jsonl_norms:
             laws.append({
@@ -282,8 +283,8 @@ async def generate_document(
             organ_hint = None
             if data.additional_instructions:
                 organ_hint = data.additional_instructions
-            jsonl_norms = rag_laws.search(
-                query=law_query[:3000],
+            jsonl_norms = rag_laws.search_multi_query(
+                facts=law_query[:3000],
                 top_k=10,
                 organ_filter=organ_hint,
             )
@@ -356,12 +357,24 @@ async def generate_document(
                     i, law.get("law_title", "")[:50], law.get("article_number", ""),
                     law.get("norm_purpose", "N/A"), len(law.get("text", ""))
                 )
+        # Prepare structured violations for prompt
+        sv_dicts = None
+        if data.structured_violations:
+            sv_dicts = [v.model_dump() for v in data.structured_violations]
+
+        nvb_dict = None
+        if data.norm_violation_bindings:
+            nvb_dict = data.norm_violation_bindings
+
         generated = await ai.generate_document(
             facts=case_context_str,
             custom_instructions=matter.custom_instructions or "",
             additional_instructions=enriched_instructions,
             kb_context=kb_context,
             retrieved_laws=retrieved_laws,
+            structured_violations=sv_dicts,
+            addressee_override=data.addressee_override,
+            norm_violation_bindings=nvb_dict,
         )
         logger.info("generate_document: generated %d chars", len(generated))
     except Exception as e:
@@ -430,12 +443,48 @@ async def generate_document(
         except Exception as e:
             logger.warning("generate_document: norm-fix retry failed: %s", e)
 
-    # ── Addressee validation ──
+    # ── Addressee validation + auto-fix ──
     addressee_check = validate_addressee(generated)
     if not addressee_check["ok"]:
         logger.warning(
-            "generate_document: BAD ADDRESSEE — %s", addressee_check["reason"]
+            "generate_document: BAD ADDRESSEE — %s. Attempting auto-fix.",
+            addressee_check["reason"],
         )
+        try:
+            addr_fix_prompt = (
+                "В представлении НЕПРАВИЛЬНЫЙ АДРЕСАТ — указан правоохранительный орган. "
+                "Представление по ст.200 УПК РК НИКОГДА не адресуется полиции, прокуратуре "
+                "или следственному органу! Адресат — организация/лицо, чьи нарушения "
+                "способствовали преступлению.\n\n"
+                "Алгоритм:\n"
+                "1. Определи из фабулы причины и условия преступления\n"
+                "2. Определи, какая организация обязана была предотвратить эти условия\n"
+                "3. Замени адресата на эту организацию\n\n"
+                "Примеры правильных адресатов:\n"
+                "— Кража из-за отсутствия освещения → Акиму/КСК/Управлению ЖКХ\n"
+                "— Кража из магазина без охраны → Руководителю магазина\n"
+                "— ДТП из-за ямы → Акиму/Управлению дорог\n\n"
+                "Верни ПОЛНЫЙ документ с ИСПРАВЛЕННЫМ адресатом в HTML.\n\n"
+                f"Исходный документ:\n{generated}"
+            )
+            addr_fix_system = (
+                "Ты — юридический редактор. Исправь адресата представления. "
+                "Сохрани весь текст и структуру, измени ТОЛЬКО шапку-адресат."
+            )
+            generated_v3 = await ai._call_llm(addr_fix_system, addr_fix_prompt)
+            if generated_v3 and len(generated_v3) > len(generated) * 0.5:
+                addr_check_v3 = validate_addressee(generated_v3)
+                if addr_check_v3["ok"]:
+                    generated = generated_v3
+                    addressee_check = addr_check_v3
+                    validation = validate_representation(generated)
+                    citation_check = validate_law_citations(generated, retrieved_laws)
+                    norm_check = validate_norm_usage(generated, retrieved_laws)
+                    logger.info("generate_document: addressee auto-fix succeeded")
+                else:
+                    logger.warning("generate_document: addressee auto-fix did not resolve")
+        except Exception as e:
+            logger.warning("generate_document: addressee auto-fix failed: %s", e)
 
     # Legacy retry for missing sections (kept for backward compat)
     if not validation["ok"] and validation["missing"]:
@@ -472,11 +521,24 @@ async def generate_document(
         else f"Представление — {matter.name}"
     )
 
-    # Build extended validation result with norm and addressee info
+    # Build extended validation result with norm, addressee, and generation metadata
+    generation_metadata = {
+        "laws_sent": len(retrieved_laws) if retrieved_laws else 0,
+        "laws_used": len(norm_check.get("used", [])),
+        "laws_unused": len(norm_check.get("unused", [])),
+        "addressee_ok": addressee_check.get("ok", True),
+        "sections_ok": validation.get("ok", False),
+        "sections_missing": validation.get("missing", []),
+        "citation_unverified": citation_check.get("unverified", []),
+        "retry_performed": not norm_check.get("all_used", True),
+        "addressee_retry": not addressee_check.get("ok", True),
+    }
+
     extended_validation = {
         **validation,
         "norm_usage": norm_check,
         "addressee": addressee_check,
+        "generation_metadata": generation_metadata,
     }
 
     rep = Representation(
@@ -495,6 +557,10 @@ async def generate_document(
     db.add(rep)
     await db.flush()
     await db.refresh(rep)
+    logger.info(
+        "generate_document: saved rep=%s metadata=%s",
+        rep.id, json.dumps(generation_metadata, ensure_ascii=False),
+    )
 
     assistant_msg = ChatMessage(
         matter_id=data.matter_id,

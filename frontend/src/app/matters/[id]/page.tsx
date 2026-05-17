@@ -7,7 +7,7 @@ import Navbar from "@/components/Navbar";
 import FilesSidebar from "@/components/FilesSidebar";
 import ChatPanel from "@/components/ChatPanel";
 import DocumentEditor from "@/components/DocumentEditor";
-import { Matter, FileItem, ChatMessage, Template, KBStats, RetrievedLaw, CitationCheck } from "@/types";
+import { Matter, FileItem, ChatMessage, Template, KBStats, RetrievedLaw, CitationCheck, StructuredViolation } from "@/types";
 import {
   Loader2,
   MessageSquare,
@@ -70,6 +70,10 @@ export default function MatterDetailPage() {
   const [currentRepId, setCurrentRepId] = useState<string | null>(null);
   const [editorSaving, setEditorSaving] = useState(false);
   const [editorLastSaved, setEditorLastSaved] = useState("");
+  // Phase 3: Causes & Conditions wizard state
+  const [violations, setViolations] = useState<StructuredViolation[]>([{ description: "", responsible: "", link_to_crime: "" }]);
+  const [addresseeOverride, setAddresseeOverride] = useState("");
+  const [normBindings, setNormBindings] = useState<Record<number, number>>({}); // lawIndex → violationIndex
   const autoSaveTimer = useRef<NodeJS.Timeout | null>(null);
   const editorSaveTimer = useRef<NodeJS.Timeout | null>(null);
 
@@ -192,7 +196,7 @@ export default function MatterDetailPage() {
       const laws = (await api.searchLaws(matterId)) as RetrievedLaw[];
       setRetrievedLaws(laws);
       setSelectedLaws(new Set(laws.map((_, i) => i)));
-      setWizardStep(2);
+      setWizardStep(3);
     } catch (e: any) {
       alert("Ошибка поиска законов: " + e.message);
     } finally {
@@ -210,11 +214,26 @@ export default function MatterDetailPage() {
     try {
       // Filter laws by user selection and pass to backend
       const lawsToSend = retrievedLaws.filter((_, i) => selectedLaws.has(i));
+
+      // Build structured violations (only non-empty)
+      const violsToSend = violations.filter(v => v.description.trim());
+
+      // Build norm-violation bindings as string keys for API
+      const bindingsToSend: Record<string, number> = {};
+      for (const [lawIdx, violIdx] of Object.entries(normBindings)) {
+        if (selectedLaws.has(Number(lawIdx)) && violIdx < violsToSend.length) {
+          bindingsToSend[String(lawIdx)] = violIdx;
+        }
+      }
+
       const res = (await api.generateDocument(
         matterId,
         "",  // template_name не передаётся — ИИ сам определяет структуру по правилам
         additionalInstructions,
-        lawsToSend.length > 0 ? lawsToSend : undefined
+        lawsToSend.length > 0 ? lawsToSend : undefined,
+        violsToSend.length > 0 ? violsToSend : undefined,
+        addresseeOverride.trim() || undefined,
+        Object.keys(bindingsToSend).length > 0 ? bindingsToSend : undefined,
       )) as {
         content: string;
         representation_id?: string;
@@ -362,13 +381,16 @@ export default function MatterDetailPage() {
                 Генерация представления
               </h3>
               <div className="flex items-center gap-1 text-xs text-gray-400">
-                <span className={`w-6 h-6 rounded-full flex items-center justify-center text-[10px] font-bold ${wizardStep >= 1 ? "bg-brand-600 text-white" : "bg-gray-200 text-gray-500"}`}>1</span>
-                <span className="w-4 h-px bg-gray-300" />
-                <span className={`w-6 h-6 rounded-full flex items-center justify-center text-[10px] font-bold ${wizardStep >= 2 ? "bg-brand-600 text-white" : "bg-gray-200 text-gray-500"}`}>2</span>
+                {[1, 2, 3, 4].map((s, i) => (
+                  <span key={s} className="flex items-center gap-1">
+                    {i > 0 && <span className="w-3 h-px bg-gray-300" />}
+                    <span className={`w-6 h-6 rounded-full flex items-center justify-center text-[10px] font-bold ${wizardStep >= s ? "bg-brand-600 text-white" : "bg-gray-200 text-gray-500"}`}>{s}</span>
+                  </span>
+                ))}
               </div>
             </div>
 
-            {/* Step 1: instructions only */}
+            {/* Step 1: Additional instructions */}
             {wizardStep === 1 && (
               <div className="space-y-4">
                 <div className="flex items-center gap-2 flex-wrap">
@@ -383,7 +405,7 @@ export default function MatterDetailPage() {
                 </div>
                 <div className="bg-brand-50 border border-brand-200 rounded-lg px-4 py-3 text-xs text-brand-700 flex items-start gap-2">
                   <Scale className="w-4 h-4 mt-0.5 flex-shrink-0" />
-                  <span>ИИ самостоятельно определит адресата и структуру представления по фактам дела и выбранным нормам закона.</span>
+                  <span>На следующем шаге укажите конкретные нарушения и адресата. ИИ использует эти данные для точного документа.</span>
                 </div>
                 <div>
                   <label className="block text-sm font-medium text-gray-700 mb-1">Дополнительные указания</label>
@@ -391,6 +413,53 @@ export default function MatterDetailPage() {
                 </div>
                 <div className="flex items-center gap-3 pt-2">
                   <button onClick={() => { setShowGenDialog(false); setWizardStep(1); }} className="flex-1 py-2.5 border border-gray-300 text-gray-700 text-sm font-medium rounded-lg hover:bg-gray-50">Отмена</button>
+                  <button onClick={() => setWizardStep(2)} className="flex-1 py-2.5 bg-brand-600 text-white text-sm font-medium rounded-lg hover:bg-brand-700 flex items-center justify-center gap-2">
+                    <ArrowRight className="w-4 h-4" />
+                    Далее — причины и условия
+                  </button>
+                </div>
+              </div>
+            )}
+
+            {/* Step 2: Causes & Conditions */}
+            {wizardStep === 2 && (
+              <div className="space-y-4 flex-1 flex flex-col min-h-0">
+                <div className="flex items-center gap-2 text-sm text-gray-700">
+                  <AlertTriangle className="w-4 h-4 text-amber-500" />
+                  <span className="font-medium">Причины и условия преступления</span>
+                </div>
+                <p className="text-xs text-gray-500">Укажите конкретные нарушения, которые привели к преступлению. ИИ будет использовать только эти нарушения.</p>
+
+                <div className="flex-1 min-h-0 overflow-y-auto space-y-3">
+                  {violations.map((v, i) => (
+                    <div key={i} className="border border-gray-200 rounded-lg p-3 space-y-2 bg-gray-50/50">
+                      <div className="flex items-center justify-between">
+                        <span className="text-xs font-semibold text-gray-500">Нарушение {i + 1}</span>
+                        {violations.length > 1 && (
+                          <button onClick={() => setViolations(prev => prev.filter((_, j) => j !== i))} className="text-xs text-red-500 hover:text-red-700">Удалить</button>
+                        )}
+                      </div>
+                      <input value={v.description} onChange={(e) => { const next = [...violations]; next[i] = { ...next[i], description: e.target.value }; setViolations(next); }} className="w-full px-3 py-2 rounded border border-gray-300 text-sm focus:outline-none focus:ring-2 focus:ring-brand-500" placeholder="Что нарушено? (напр. Отсутствие освещения дворовой территории)" />
+                      <div className="grid grid-cols-2 gap-2">
+                        <input value={v.responsible} onChange={(e) => { const next = [...violations]; next[i] = { ...next[i], responsible: e.target.value }; setViolations(next); }} className="px-3 py-2 rounded border border-gray-300 text-sm focus:outline-none focus:ring-2 focus:ring-brand-500" placeholder="Ответственный (КСК, ТОО...)" />
+                        <input value={v.link_to_crime} onChange={(e) => { const next = [...violations]; next[i] = { ...next[i], link_to_crime: e.target.value }; setViolations(next); }} className="px-3 py-2 rounded border border-gray-300 text-sm focus:outline-none focus:ring-2 focus:ring-brand-500" placeholder="Связь с преступлением" />
+                      </div>
+                    </div>
+                  ))}
+                  <button onClick={() => setViolations(prev => [...prev, { description: "", responsible: "", link_to_crime: "" }])} className="w-full py-2 border border-dashed border-gray-300 rounded-lg text-xs text-gray-500 hover:bg-gray-50 flex items-center justify-center gap-1">
+                    + Добавить нарушение
+                  </button>
+                </div>
+
+                <div>
+                  <label className="block text-xs font-medium text-gray-700 mb-1">Адресат представления (необязательно)</label>
+                  <input value={addresseeOverride} onChange={(e) => setAddresseeOverride(e.target.value)} className="w-full px-3 py-2 rounded border border-gray-300 text-sm focus:outline-none focus:ring-2 focus:ring-brand-500" placeholder="напр. Председателю КСК «Качар» (если пусто — ИИ определит сам)" />
+                </div>
+
+                <div className="flex items-center gap-3 pt-2 flex-shrink-0">
+                  <button onClick={() => setWizardStep(1)} className="flex items-center justify-center gap-1 flex-1 py-2.5 border border-gray-300 text-gray-700 text-sm font-medium rounded-lg hover:bg-gray-50">
+                    <ArrowLeft className="w-4 h-4" />Назад
+                  </button>
                   <button onClick={handleSearchLaws} disabled={searchingLaws} className="flex-1 py-2.5 bg-brand-600 text-white text-sm font-medium rounded-lg hover:bg-brand-700 disabled:opacity-50 flex items-center justify-center gap-2">
                     {searchingLaws ? <Loader2 className="w-4 h-4 animate-spin" /> : <ArrowRight className="w-4 h-4" />}
                     Далее — поиск законов
@@ -399,69 +468,130 @@ export default function MatterDetailPage() {
               </div>
             )}
 
-            {/* Step 2: Retrieved laws selection */}
-            {wizardStep === 2 && (
+            {/* Step 3: Retrieved laws selection + norm-violation binding */}
+            {wizardStep === 3 && (
               <div className="space-y-4 flex-1 flex flex-col min-h-0">
                 <div className="flex items-center gap-2 text-sm text-gray-700">
                   <Scale className="w-4 h-4 text-brand-600" />
                   <span className="font-medium">Найденные нормы закона ({retrievedLaws.length})</span>
                 </div>
-                <p className="text-xs text-gray-500">Снимите отметку с нерелевантных норм. Отмеченные будут переданы модели для обоснования.</p>
+                <p className="text-xs text-gray-500">Снимите отметку с нерелевантных норм. Привяжите каждую норму к нарушению из шага 2.</p>
                 <div className="flex-1 min-h-0 overflow-y-auto border border-gray-200 rounded-lg divide-y divide-gray-100">
                   {retrievedLaws.length === 0 ? (
-                    <p className="p-4 text-xs text-gray-400 text-center">Нормативные акты не найдены в базе законодательства. Загрузите законы в разделе «Законодательство».</p>
+                    <p className="p-4 text-xs text-gray-400 text-center">Нормативные акты не найдены в базе законодательства.</p>
                   ) : retrievedLaws.map((law, i) => {
-                    // Relevance percentage: backend now returns raw cosine similarity (0-1)
                     const rawScore = typeof law.score === 'number' ? law.score : 0;
                     const pct = Math.round(Math.max(1, Math.min(99, rawScore * 100)));
                     const pctColor = pct >= 70 ? "text-green-600 bg-green-50" : pct >= 50 ? "text-blue-600 bg-blue-50" : pct >= 35 ? "text-amber-600 bg-amber-50" : "text-gray-500 bg-gray-100";
-                    // Strip markdown formatting from text
-                    const cleanText = law.text
-                      .replace(/\*\*([^*]+)\*\*/g, '$1')
-                      .replace(/\*([^*]+)\*/g, '$1')
-                      .replace(/#{1,6}\s*/g, '')
-                      .replace(/\[([^\]]+)\]\([^)]+\)/g, '$1')
-                      .replace(/^[-*+]\s+/gm, '• ')
-                      .replace(/`([^`]+)`/g, '$1')
-                      .replace(/\n{2,}/g, '\n')
-                      .trim();
+                    const cleanText = law.text.replace(/\*\*([^*]+)\*\*/g, '$1').replace(/\*([^*]+)\*/g, '$1').replace(/#{1,6}\s*/g, '').replace(/\[([^\]]+)\]\([^)]+\)/g, '$1').replace(/^[-*+]\s+/gm, '• ').replace(/`([^`]+)`/g, '$1').replace(/\n{2,}/g, '\n').trim();
+                    const filledViols = violations.filter(v => v.description.trim());
                     return (
-                      <label key={i} className="flex items-start gap-3 p-4 hover:bg-gray-50 cursor-pointer group">
-                        <input type="checkbox" checked={selectedLaws.has(i)} onChange={() => {
-                          setSelectedLaws((prev) => {
-                            const next = new Set(prev);
-                            if (next.has(i)) next.delete(i); else next.add(i);
-                            return next;
-                          });
-                        }} className="mt-1 rounded text-brand-600 focus:ring-brand-500 flex-shrink-0" />
-                        <div className="flex-1 min-w-0">
-                          <div className="flex items-start gap-2 flex-wrap">
-                            <span className="text-sm font-medium text-gray-900">{law.law_title}</span>
-                            {law.article_number && <span className="text-[11px] bg-brand-50 text-brand-700 px-2 py-0.5 rounded font-medium whitespace-nowrap">ст.{law.article_number}</span>}
-                            <span className={`text-[11px] font-semibold px-2 py-0.5 rounded ml-auto whitespace-nowrap ${pctColor}`}>{pct}%</span>
+                      <div key={i} className="p-4 hover:bg-gray-50">
+                        <label className="flex items-start gap-3 cursor-pointer group">
+                          <input type="checkbox" checked={selectedLaws.has(i)} onChange={() => {
+                            setSelectedLaws((prev) => { const next = new Set(prev); if (next.has(i)) next.delete(i); else next.add(i); return next; });
+                          }} className="mt-1 rounded text-brand-600 focus:ring-brand-500 flex-shrink-0" />
+                          <div className="flex-1 min-w-0">
+                            <div className="flex items-start gap-2 flex-wrap">
+                              <span className="text-sm font-medium text-gray-900">{law.law_title}</span>
+                              {law.article_number && <span className="text-[11px] bg-brand-50 text-brand-700 px-2 py-0.5 rounded font-medium whitespace-nowrap">ст.{law.article_number}</span>}
+                              <span className={`text-[11px] font-semibold px-2 py-0.5 rounded ml-auto whitespace-nowrap ${pctColor}`}>{pct}%</span>
+                            </div>
+                            <p className="text-xs text-gray-600 mt-1.5 leading-relaxed whitespace-pre-line line-clamp-3 group-hover:line-clamp-none">{cleanText.substring(0, 400)}</p>
                           </div>
-                          <p className="text-xs text-gray-600 mt-1.5 leading-relaxed whitespace-pre-line line-clamp-4 group-hover:line-clamp-none transition-all">{cleanText.substring(0, 500)}</p>
-                          {law.ai_reason && (
-                            <p className="text-[11px] text-blue-600 mt-1.5 italic flex items-start gap-1">
-                              <span className="flex-shrink-0">✨</span>
-                              {law.ai_reason}
-                            </p>
-                          )}
-                        </div>
-                      </label>
+                        </label>
+                        {selectedLaws.has(i) && filledViols.length > 0 && (
+                          <div className="mt-2 ml-8">
+                            <select value={normBindings[i] ?? ""} onChange={(e) => { setNormBindings(prev => ({ ...prev, [i]: e.target.value === "" ? undefined! : Number(e.target.value) })); }} className="text-xs px-2 py-1.5 rounded border border-gray-300 bg-white focus:ring-2 focus:ring-brand-500 w-full">
+                              <option value="">— Привязать к нарушению —</option>
+                              {filledViols.map((v, vi) => (
+                                <option key={vi} value={vi}>Нарушение {vi + 1}: {v.description.substring(0, 60)}</option>
+                              ))}
+                            </select>
+                          </div>
+                        )}
+                      </div>
                     );
                   })}
                 </div>
                 <div className="flex items-center gap-3 pt-2 flex-shrink-0">
-                  <button onClick={() => setWizardStep(1)} className="flex items-center justify-center gap-1 flex-1 py-2.5 border border-gray-300 text-gray-700 text-sm font-medium rounded-lg hover:bg-gray-50">
+                  <button onClick={() => setWizardStep(2)} className="flex items-center justify-center gap-1 flex-1 py-2.5 border border-gray-300 text-gray-700 text-sm font-medium rounded-lg hover:bg-gray-50">
                     <ArrowLeft className="w-4 h-4" />Назад
                   </button>
-                  <button onClick={handleGenerate} className="flex-1 py-2.5 bg-brand-600 text-white text-sm font-medium rounded-lg hover:bg-brand-700 disabled:opacity-50 flex items-center justify-center gap-2">
-                    <Sparkles className="w-4 h-4" />Сгенерировать ({selectedLaws.size} норм)
+                  <button onClick={() => setWizardStep(4)} className="flex-1 py-2.5 bg-brand-600 text-white text-sm font-medium rounded-lg hover:bg-brand-700 flex items-center justify-center gap-2">
+                    <ArrowRight className="w-4 h-4" />Превью ({selectedLaws.size} норм)
                   </button>
                 </div>
               </div>
             )}
+
+            {/* Step 4: Preview skeleton before generation */}
+            {wizardStep === 4 && (() => {
+              const filledViols = violations.filter(v => v.description.trim());
+              const selLaws = retrievedLaws.filter((_, i) => selectedLaws.has(i));
+              return (
+                <div className="space-y-4 flex-1 flex flex-col min-h-0">
+                  <div className="flex items-center gap-2 text-sm text-gray-700">
+                    <FileText className="w-4 h-4 text-brand-600" />
+                    <span className="font-medium">Превью структуры документа</span>
+                  </div>
+                  <div className="flex-1 min-h-0 overflow-y-auto border border-gray-200 rounded-lg p-4 bg-gray-50/50 space-y-3 text-sm">
+                    <div>
+                      <span className="text-xs font-semibold text-gray-500 uppercase">Адресат</span>
+                      <p className="text-gray-800 mt-0.5">{addresseeOverride.trim() || "ИИ определит автоматически по фабуле дела"}</p>
+                    </div>
+                    <hr className="border-gray-200" />
+                    <div>
+                      <span className="text-xs font-semibold text-gray-500 uppercase">Выявленные нарушения ({filledViols.length})</span>
+                      {filledViols.length === 0 ? (
+                        <p className="text-xs text-gray-400 mt-1">Не указаны — ИИ определит из фабулы</p>
+                      ) : filledViols.map((v, i) => {
+                        const boundLaw = Object.entries(normBindings).find(([, vi]) => vi === i);
+                        const lawInfo = boundLaw ? retrievedLaws[Number(boundLaw[0])] : null;
+                        return (
+                          <div key={i} className="mt-1.5 flex items-start gap-2">
+                            <span className="text-brand-600 font-bold text-xs mt-0.5">{i + 1}.</span>
+                            <div>
+                              <p className="text-gray-800">{v.description}</p>
+                              {v.responsible && <p className="text-xs text-gray-500">Ответственный: {v.responsible}</p>}
+                              {lawInfo ? (
+                                <p className="text-xs text-brand-600 mt-0.5">→ Норма: {lawInfo.law_title} ст.{lawInfo.article_number}</p>
+                              ) : (
+                                <p className="text-xs text-amber-500 mt-0.5">⚠ Норма не привязана</p>
+                              )}
+                            </div>
+                          </div>
+                        );
+                      })}
+                    </div>
+                    <hr className="border-gray-200" />
+                    <div>
+                      <span className="text-xs font-semibold text-gray-500 uppercase">Нормы закона ({selLaws.length})</span>
+                      {selLaws.map((law, i) => (
+                        <p key={i} className="text-xs text-gray-700 mt-1">• {law.law_title} ст.{law.article_number}</p>
+                      ))}
+                    </div>
+                    {additionalInstructions.trim() && (
+                      <>
+                        <hr className="border-gray-200" />
+                        <div>
+                          <span className="text-xs font-semibold text-gray-500 uppercase">Доп. указания</span>
+                          <p className="text-xs text-gray-600 mt-0.5">{additionalInstructions}</p>
+                        </div>
+                      </>
+                    )}
+                  </div>
+                  <div className="flex items-center gap-3 pt-2 flex-shrink-0">
+                    <button onClick={() => setWizardStep(3)} className="flex items-center justify-center gap-1 flex-1 py-2.5 border border-gray-300 text-gray-700 text-sm font-medium rounded-lg hover:bg-gray-50">
+                      <ArrowLeft className="w-4 h-4" />Назад
+                    </button>
+                    <button onClick={handleGenerate} className="flex-1 py-2.5 bg-brand-600 text-white text-sm font-medium rounded-lg hover:bg-brand-700 flex items-center justify-center gap-2">
+                      <Sparkles className="w-4 h-4" />Сгенерировать документ
+                    </button>
+                  </div>
+                </div>
+              );
+            })()}
           </div>
         </div>
       )}

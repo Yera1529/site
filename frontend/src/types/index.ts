@@ -110,6 +110,12 @@ export interface RetrievedLaw {
   ai_reason?: string;
 }
 
+export interface StructuredViolation {
+  description: string;
+  responsible: string;
+  link_to_crime: string;
+}
+
 export interface CitationCheck {
   cited: string[];
   unverified: string[];

@@ -34,11 +34,23 @@ class SelectedLaw(BaseModel):
     applicable_measures: Optional[str] = None
 
 
+class StructuredViolation(BaseModel):
+    """A user-specified violation that contributed to the crime."""
+    description: str  # What happened (e.g. "Отсутствие освещения двора")
+    responsible: str = ""  # Who is responsible (e.g. "КСК «Качар»")
+    link_to_crime: str = ""  # How it enabled the crime
+
+
 class GenerateDocumentRequest(BaseModel):
     matter_id: uuid.UUID
     template_name: Optional[str] = None   # больше не обязателен — правила в промпте
     additional_instructions: Optional[str] = ""
     selected_laws: Optional[List[SelectedLaw]] = None
+    # Phase 3: structured violations (causes/conditions specified by user)
+    structured_violations: Optional[List[StructuredViolation]] = None
+    addressee_override: Optional[str] = None  # User-specified addressee
+    # Norm ↔ violation bindings: maps law index → violation index
+    norm_violation_bindings: Optional[dict[str, int]] = None
 
 
 class ValidationReport(BaseModel):
