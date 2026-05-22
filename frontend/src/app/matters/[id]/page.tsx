@@ -31,6 +31,25 @@ import {
 
 type Tab = "chat" | "editor" | "instructions";
 
+const withTimeout = async <T,>(promise: Promise<T>, timeoutMs: number, fallbackValue: T): Promise<T> => {
+  let timeoutId: any;
+  const timeoutPromise = new Promise<T>((resolve) => {
+    timeoutId = setTimeout(() => {
+      console.warn("API request timed out, using fallback value");
+      resolve(fallbackValue);
+    }, timeoutMs);
+  });
+  try {
+    const result = await Promise.race([promise, timeoutPromise]);
+    clearTimeout(timeoutId);
+    return result;
+  } catch (err) {
+    console.error("API request failed, using fallback value:", err);
+    clearTimeout(timeoutId);
+    return fallbackValue;
+  }
+};
+
 export default function MatterDetailPage() {
   const router = useRouter();
   const params = useParams();
@@ -82,21 +101,36 @@ export default function MatterDetailPage() {
 
   const loadMatter = useCallback(async () => {
     try {
-      const [m, f, c, t] = await Promise.all([
-        api.getMatter(matterId),
-        api.listFiles(matterId),
-        api.getChatHistory(matterId),
-        api.listTemplates(),
+      // 1. Matter metadata is critical, so we wrap it in a timeout but return null if it fails
+      const m = await withTimeout(api.getMatter(matterId), 6000, null) as Matter | null;
+      if (!m) {
+        setMatter(null);
+        setLoading(false);
+        return;
+      }
+
+      setMatter(m);
+      setInstructions(m.custom_instructions || "");
+
+      // 2. Fetch the rest of the lists in parallel with safe 4-second timeouts and empty arrays as fallbacks
+      const [f, c, t] = await Promise.all([
+        withTimeout(api.listFiles(matterId), 4000, []),
+        withTimeout(api.getChatHistory(matterId), 4000, []),
+        withTimeout(api.listTemplates(), 4000, []),
       ]);
-      setMatter(m as Matter);
+
       setFiles(f as FileItem[]);
       setMessages(c as ChatMessage[]);
       setTemplates(t as Template[]);
-      setInstructions((m as Matter).custom_instructions || "");
 
-      api.getKBStats().then((s) => setKbStats(s as KBStats)).catch(() => { });
+      // 3. KB Stats is completely optional, load it in the background
+      withTimeout(api.getKBStats(), 3000, null)
+        .then((s) => {
+          if (s) setKbStats(s as KBStats);
+        })
+        .catch(() => {});
     } catch (e) {
-      console.error(e);
+      console.error("Critical error in loadMatter:", e);
     } finally {
       setLoading(false);
     }

@@ -3,7 +3,7 @@
 import logging
 import uuid
 from typing import List
-from fastapi import APIRouter, Depends, HTTPException, UploadFile, File as FastAPIFile
+from fastapi import APIRouter, Depends, HTTPException, UploadFile, File as FastAPIFile, BackgroundTasks
 from fastapi.responses import FileResponse
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -19,6 +19,15 @@ from services.storage import StorageService
 from services.rag import RAGService
 
 logger = logging.getLogger(__name__)
+
+
+def run_bg_index_document(matter_id: str, file_id: str, text: str):
+    try:
+        rag = RAGService()
+        rag.index_document(matter_id, file_id, text)
+    except Exception as e:
+        logger.error("RAG indexing failed in background task for file %s: %s", file_id, e)
+
 
 router = APIRouter(prefix="/api/matters/{matter_id}/files", tags=["files"])
 
@@ -42,6 +51,7 @@ async def list_files(
 @router.post("", response_model=FileSchema, status_code=201)
 async def upload_file(
     matter_id: uuid.UUID,
+    background_tasks: BackgroundTasks,
     file: UploadFile = FastAPIFile(...),
     user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
@@ -97,10 +107,14 @@ async def upload_file(
 
     if extracted_text and not extracted_text.startswith("[Ошибка"):
         try:
-            rag = RAGService()
-            rag.index_document(str(matter_id), str(db_file.id), extracted_text)
+            background_tasks.add_task(
+                run_bg_index_document,
+                str(matter_id),
+                str(db_file.id),
+                extracted_text
+            )
         except Exception as e:
-            logger.error("RAG indexing failed for file %s: %s", db_file.id, e)
+            logger.error("Failed to add background task for RAG indexing of file %s: %s", db_file.id, e)
 
     return FileSchema.model_validate(db_file)
 
