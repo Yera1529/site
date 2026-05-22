@@ -1,6 +1,8 @@
 import { RetrievedLaw } from "@/types";
 /** URL бэкенда (запросы идут из браузера — указывайте адрес, доступный с клиента). Задаётся в .env.local как NEXT_PUBLIC_API_URL. */
-export const API_URL = process.env.NEXT_PUBLIC_API_URL || "http://localhost:8000";
+export const API_URL = typeof window === "undefined"
+  ? "http://backend:8000"
+  : (process.env.NEXT_PUBLIC_API_URL || "http://localhost:8000");
 
 function getToken(): string | null {
   if (typeof window === "undefined") return null;
