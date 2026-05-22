@@ -25,3 +25,10 @@ backend/storage/chroma_db/
 # OS
 .DS_Store
 Thumbs.db
+
+# Secrets and credentials
+gen-lang-client-*.json
+credentials.json
+backend/credentials.json
+*.jsonl
+

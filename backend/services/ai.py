@@ -21,40 +21,44 @@ logger = logging.getLogger(__name__)
 # Eight mandatory sections derived from the official Instruction (ст.200 УПК)
 # ---------------------------------------------------------------------------
 MANDATORY_SECTIONS_SPEC = """\
-Представление по ст.200 УПК РК ОБЯЗАТЕЛЬНО должно содержать ВСЕ 8 разделов:
+СОДЕРЖАТЕЛЬНЫЕ ТРЕБОВАНИЯ к представлению по ст.200 УПК РК.
+Это перечень обязательного СОДЕРЖАНИЯ. Итоговая СТРУКТУРА документа состоит
+из 9 разделов и задаётся ниже в блоке REPRESENTATION_RULES (он главный).
+Все перечисленные ниже содержательные требования должны быть распределены
+по этим 9 структурным разделам:
 
-РАЗДЕЛ 1 — ДАТА, МЕСТО, АВТОР
+ТРЕБОВАНИЕ A — ДАТА, МЕСТО, АВТОР
   Дата и место составления. Должность, звание и ФИО следователя/дознавателя.
 
-РАЗДЕЛ 2 — ФАБУЛА ДЕЛА
+ТРЕБОВАНИЕ B — ФАБУЛА ДЕЛА
   Краткое изложение обстоятельств: время, место, участники, действия,
   квалификация по статье УК РК, номер ЕРДР.
 
-РАЗДЕЛ 3 — ВЫЯВЛЕННЫЕ НАРУШЕНИЯ
+ТРЕБОВАНИЕ C — ВЫЯВЛЕННЫЕ НАРУШЕНИЯ
   Подробное описание конкретных нарушений (действий/бездействий) организаций
   и должностных лиц, которые создали условия для преступления.
   Для каждого нарушения: что именно нарушено, кем, когда.
 
-РАЗДЕЛ 4 — НАРУШЕННЫЕ НОРМАТИВНЫЕ АКТЫ
-  Для каждого нарушения из Раздела 3 укажи конкретную статью закона,
+ТРЕБОВАНИЕ D — НАРУШЕННЫЕ НОРМАТИВНЫЕ АКТЫ
+  Для каждого нарушения (требование C) укажи конкретную статью закона,
   правил, инструкций или регламента, которая нарушена.
   Формат: «ст. NNN Название закона» (используй ТОЛЬКО нормы из контекста).
 
-РАЗДЕЛ 5 — ПРИЧИННО-СЛЕДСТВЕННАЯ СВЯЗЬ
-  Объясни, каким образом каждое нарушение (из Раздела 3) привело или
+ТРЕБОВАНИЕ E — ПРИЧИННО-СЛЕДСТВЕННАЯ СВЯЗЬ
+  Объясни, каким образом каждое нарушение (требование C) привело или
   способствовало совершению преступления. Причинно-следственная цепочка
   должна быть явной и логичной.
 
-РАЗДЕЛ 6 — ПРЕДЛАГАЕМЫЕ МЕРЫ
+ТРЕБОВАНИЕ F — ПРЕДЛАГАЕМЫЕ МЕРЫ
   Нумерованный список конкретных мер по устранению причин и условий
   преступления. Каждая мера — с указанием ответственного органа/лица
   и правового основания (ст.200 ч.2 УПК РК и др.).
 
-РАЗДЕЛ 7 — СРОКИ ИСПОЛНЕНИЯ
+ТРЕБОВАНИЕ G — СРОКИ ИСПОЛНЕНИЯ
   Указание на обязанность сообщить о принятых мерах не позднее
   одного месяца со дня получения представления (ч.2 ст.200 УПК РК).
 
-РАЗДЕЛ 8 — ПРЕДУПРЕЖДЕНИЕ ОБ ОТВЕТСТВЕННОСТИ
+ТРЕБОВАНИЕ H — ПРЕДУПРЕЖДЕНИЕ ОБ ОТВЕТСТВЕННОСТИ
   Предупреждение о том, что невыполнение представления или
   непредставление ответа в установленный срок влечёт
   ответственность по ст.479 и ст.664 КоАП РК.
@@ -167,6 +171,89 @@ FEW_SHOT_EXAMPLE = """\
 ОБРАТИ ВНИМАНИЕ: адресат — ТОО «Пример» (организация, чьи нарушения
 способствовали преступлению), а НЕ начальник полиции!
 """
+
+# ---------------------------------------------------------------------------
+# Краткие эталоны логики по типам дел.
+# Базовый FEW_SHOT_EXAMPLE — кража. Эти ориентиры подбираются по фабуле,
+# чтобы для ДТП/пожара/несовершеннолетних/охраны труда модель не подгоняла
+# документ под структуру кражи. Это НЕ текст для копирования — только логика
+# «адресат → характер нарушений → причинная цепочка → меры».
+# ---------------------------------------------------------------------------
+CRIME_EXEMPLARS: dict[str, dict] = {
+    "дтп": {
+        "patterns": (r"дтп", r"дорожно", r"аварий", r"наезд", r"столкновен",
+                     r"выезд на встречн", r"опрокидыван", r"пешеход", r"сбил"),
+        "text": (
+            "── Ориентир по логике (ДТП / дорожное движение) ──\n"
+            "Адресат: как правило — Аким/Управление дорог/КГУ, обслуживающее дорогу, "
+            "или орган техосмотра — НЕ полиция.\n"
+            "Характер нарушений: непринятие мер по содержанию дороги (ямы, отсутствие "
+            "освещения, разметки, знаков, ограждений), допуск к эксплуатации неисправного ТС.\n"
+            "Причинная цепочка: ненадлежащее содержание участка дороги/допуск неисправного "
+            "ТС → создание опасной дорожной обстановки → ДТП.\n"
+            "Меры: восстановить покрытие/нанести разметку/установить знаки; усилить контроль "
+            "техосмотра; привлечь виновных должностных лиц."
+        ),
+    },
+    "пожар": {
+        "patterns": (r"пожар", r"возгоран", r"\bогн", r"задымлен", r"горени"),
+        "text": (
+            "── Ориентир по логике (пожарная безопасность) ──\n"
+            "Адресат: руководитель объекта/организации, ответственной за пожарную "
+            "безопасность помещения (собственник, балансодержатель), при необходимости — ДЧС.\n"
+            "Характер нарушений: отсутствие/неисправность средств тушения и сигнализации, "
+            "заблокированные эвакуационные выходы, отсутствие инструктажа.\n"
+            "Причинная цепочка: невыполнение требований пожарной безопасности → "
+            "беспрепятственное развитие пожара/невозможность эвакуации → последствия.\n"
+            "Меры: оснастить объект средствами тушения и сигнализацией; освободить "
+            "эвакуационные пути; провести инструктаж; привлечь ответственных лиц."
+        ),
+    },
+    "несовершеннолетние": {
+        "patterns": (r"несовершеннолетн", r"подрост", r"\bребен", r"\bдет[ейяи]",
+                     r"учащ", r"школьник", r"суицид", r"самоубийств"),
+        "text": (
+            "── Ориентир по логике (несовершеннолетние / суициды) ──\n"
+            "Адресат: руководитель органа образования/опеки, директор школы/учреждения, "
+            "при суицидах — также орган здравоохранения; нередко Аким.\n"
+            "Характер нарушений: непроведение профилактической/воспитательной работы, "
+            "отсутствие надзора, несвоевременное реагирование на сигналы неблагополучия.\n"
+            "Причинная цепочка: бездействие ответственных по профилактике → отсутствие "
+            "своевременной помощи/надзора → совершение/последствия деяния.\n"
+            "Меры: организовать профилактическую и психологическую работу; усилить надзор; "
+            "наладить межведомственное взаимодействие; привлечь виновных."
+        ),
+    },
+    "охрана_труда": {
+        "patterns": (r"охран[аы]\s*труда", r"производствен", r"\bтравм", r"на производстве",
+                     r"рабоч[еи][мй]\s*мест", r"техник[аи]\s*безопасн", r"строитель", r"обрушен"),
+        "text": (
+            "── Ориентир по логике (охрана труда / производство) ──\n"
+            "Адресат: руководитель предприятия/работодатель (ТОО, ИП), застройщик/подрядчик.\n"
+            "Характер нарушений: необеспечение безопасных условий труда, отсутствие СИЗ, "
+            "инструктажа, допуск к работам без подготовки, нарушение строительных норм.\n"
+            "Причинная цепочка: неисполнение обязанностей по охране труда → опасные условия "
+            "на рабочем месте → несчастный случай/последствия.\n"
+            "Меры: обеспечить безопасные условия и СИЗ; провести инструктаж; устранить "
+            "нарушения норм; привлечь виновных должностных лиц к ответственности."
+        ),
+    },
+    "наркотики": {
+        "patterns": (r"наркот", r"психотроп", r"прекурс", r"сбыт.{0,10}веществ"),
+        "text": (
+            "── Ориентир по логике (оборот наркотиков) ──\n"
+            "Адресат: руководитель организации, допустившей оборот/доступ (учреждение, "
+            "развлекательный объект), орган в сфере контроля оборота; при несовершеннолетних — "
+            "органы образования.\n"
+            "Характер нарушений: отсутствие контроля за оборотом/доступом, непроведение "
+            "профилактики, ненадлежащий пропускной/внутренний режим.\n"
+            "Причинная цепочка: отсутствие контроля и профилактики → доступность веществ → "
+            "совершение деяния.\n"
+            "Меры: усилить контроль и профилактику; наладить пропускной режим; "
+            "провести разъяснительную работу; привлечь виновных."
+        ),
+    },
+}
 
 LAW_TO_CITATION_DEMO = """\
 === Как использовать извлечённые нормативные акты ===
@@ -488,6 +575,45 @@ class AIService:
         return "\n".join(parts)
 
     @staticmethod
+    def _select_exemplar(
+        facts: str,
+        structured_violations: list[dict] | None = None,
+        additional_instructions: str = "",
+    ) -> str:
+        """Pick the most relevant crime-type exemplar based on case facts.
+
+        Returns a formatted block (with trailing separators) to append to the
+        system prompt, or "" if no specific crime type is detected (the base
+        theft FEW_SHOT_EXAMPLE then carries the load).
+        """
+        haystack = " ".join(filter(None, [
+            facts or "",
+            additional_instructions or "",
+            " ".join(
+                f"{v.get('description', '')} {v.get('link_to_crime', '')}"
+                for v in (structured_violations or [])
+            ),
+        ])).lower()
+        if not haystack.strip():
+            return ""
+
+        best_label, best_hits = None, 0
+        for label, spec in CRIME_EXEMPLARS.items():
+            hits = sum(1 for p in spec["patterns"] if re.search(p, haystack))
+            if hits > best_hits:
+                best_label, best_hits = label, hits
+
+        if not best_label:
+            return ""
+        return (
+            "═══ ОРИЕНТИР ПО ТИПУ ДЕЛА (логика, не текст для копирования) ═══\n"
+            f"{CRIME_EXEMPLARS[best_label]['text']}\n"
+            "Базовый пример выше (кража) показывает структуру; этот ориентир "
+            "корректирует адресата, характер нарушений, причинную цепочку и меры "
+            "под данный тип дела.\n\n"
+        )
+
+    @staticmethod
     def build_generation_prompt(
         facts: str,
         kb_context: str,
@@ -503,12 +629,16 @@ class AIService:
         по ст.200 УПК РК. Шаблоны-файлы НЕ используются — только точные правила
         построения каждого из 9 разделов документа.
         """
+        crime_exemplar = AIService._select_exemplar(
+            facts, structured_violations, additional_instructions
+        )
         system = (
             "Ты — опытный следователь МВД Республики Казахстан со стажем 15 лет. "
             "Составь юридически точное процессуальное представление по ст.200 УПК РК.\n\n"
             f"{MANDATORY_SECTIONS_SPEC}\n\n"
             f"{REPRESENTATION_RULES}\n\n"
             f"{FEW_SHOT_EXAMPLE}\n\n"
+            f"{crime_exemplar}"
             f"{LAW_TO_CITATION_DEMO}\n\n"
             "═══════════════════════════════ АНАЛИТИЧЕСКИЙ РАЗБОР ═══════════════════════════════\n"
             "ОБЯЗАТЕЛЬНО: выполни следующие шаги ВНУТРИ тегов <scratchpad>...</scratchpad>\n"
@@ -856,6 +986,77 @@ class AIService:
         )
         return await self._call_llm(system_prompt, user_prompt, enable_thinking)
 
+    # Document start markers we trust to mark the beginning of the final HTML.
+    _DOC_MARKERS = (
+        "<h1", "<h2", "<p ", "<p>", "<div",
+        "П Р Е Д", "ПРЕДСТАВЛЕНИЕ", "ПРЕДСТА",
+        "Руководител", "Директор", "Акиму", "Председател", "Начальник", "Министр",
+    )
+
+    @classmethod
+    def _first_marker_idx(cls, s: str) -> int:
+        """Return index of the earliest document-start marker in s, or -1."""
+        idxs = [s.find(m) for m in cls._DOC_MARKERS]
+        idxs = [i for i in idxs if i >= 0]
+        return min(idxs) if idxs else -1
+
+    @classmethod
+    def _extract_document(cls, raw: str) -> str:
+        """Extract the final HTML representation from a raw LLM response.
+
+        Handles <think>, <scratchpad> (closed/unclosed, tagged or plain-text),
+        and markdown code fences. ALWAYS returns a non-empty result when the
+        input was non-empty: if extraction would drop the document, it falls
+        back to the full text with only reasoning wrappers neutralised.
+        """
+        if not raw:
+            return ""
+        original = raw
+        text = raw
+
+        # 1. Remove fully-closed <think>...</think> blocks
+        if "</think>" in text.lower():
+            text = re.sub(r"<think\b[^>]*>.*?</think>", "", text,
+                          flags=re.DOTALL | re.IGNORECASE)
+
+        # 2. Scratchpad handling (tagged)
+        low = text.lower()
+        if "</scratchpad>" in low:
+            # Take everything after the LAST closing scratchpad tag
+            idx = low.rfind("</scratchpad>")
+            text = text[idx + len("</scratchpad>"):]
+        elif "<scratchpad" in low:
+            # Unclosed scratchpad — jump to the first real document marker
+            sp = low.find("<scratchpad")
+            after = text[sp:]
+            mi = cls._first_marker_idx(after)
+            text = after[mi:] if mi >= 0 else text[sp:]
+
+        # 3. Plain-text reasoning header (no tags), e.g. "scratchpad\n..." / "АНАЛИЗ:"
+        if re.match(r'^\s*(?:scratchpad|Scratchpad|АНАЛИЗ|РАЗБОР|Анализ)\s*[:\n]', text):
+            mi = cls._first_marker_idx(text)
+            if mi >= 0:
+                text = text[mi:]
+
+        # 4. Strip markdown code fences (```html ... ```)
+        text = re.sub(r'^\s*```(?:html|HTML)?\s*\n?', '', text)
+        text = re.sub(r'\n?```\s*$', '', text)
+        text = text.strip()
+
+        # 5. Guarantee a usable document. If extraction collapsed the result,
+        #    fall back to the original with reasoning wrappers removed.
+        if len(text) < 100:
+            fb = re.sub(r"<think\b[^>]*>.*?</think>", "", original,
+                        flags=re.DOTALL | re.IGNORECASE)
+            fb = re.sub(r"<scratchpad\b[^>]*>.*?</scratchpad>", "", fb,
+                        flags=re.DOTALL | re.IGNORECASE)
+            fb = re.sub(r'^\s*```(?:html|HTML)?\s*\n?', '', fb)
+            fb = re.sub(r'\n?```\s*$', '', fb).strip()
+            if len(fb) > len(text):
+                text = fb
+
+        return text
+
     async def _call_llm(
         self,
         system_prompt: str,
@@ -890,45 +1091,10 @@ class AIService:
                 len(content), finish_reason
             )
 
-            # Safely strip thinking/scratchpad tags.
-            # IMPORTANT: only remove if the closing tag exists —
-            # otherwise the greedy regex deletes the ENTIRE document.
-            if "</think>" in content:
-                content = re.sub(r"<think>.*?</think>", "", content, flags=re.DOTALL)
-            elif "<think>" in content:
-                content = content.split("<think>", 1)[-1]
-
-            if "</scratchpad>" in content:
-                # Take only the text AFTER the closing scratchpad tag
-                content = content.split("</scratchpad>", 1)[-1]
-            elif "<scratchpad>" in content:
-                # Unclosed scratchpad — model put document after the tag (hopefully)
-                # Try to find the document start marker
-                for marker in ["<p ", "<h1", "П Р Е Д", "ПРЕДСТА", "ПРЕДСТАВЛЕНИЕ"]:
-                    if marker in content:
-                        idx = content.find(marker)
-                        content = content[idx:]
-                        break
-                else:
-                    # Can't find document — strip the scratchpad opening and return rest
-                    content = content.split("<scratchpad>", 1)[-1]
-
-            # Handle plain-text "scratchpad" marker (no HTML tags) from Gemini 2.5
-            # Pattern: starts with "scratchpad\n" or "Scratchpad\n"
-            scratchpad_plain = re.match(r'^(?:scratchpad|Scratchpad)\s*\n', content, re.IGNORECASE)
-            if scratchpad_plain:
-                # Find where the actual document starts (HTML marker)
-                for marker in ["<p ", "<h1", "<div", "П Р Е Д", "ПРЕДСТА", "Руководител", "Директор"]:
-                    if marker in content:
-                        idx = content.find(marker)
-                        content = content[idx:]
-                        break
-
-            # Strip markdown code block wrappers (```html ... ```)
-            content = re.sub(r'^```(?:html)?\s*\n', '', content, flags=re.MULTILINE)
-            content = re.sub(r'\n```\s*$', '', content, flags=re.MULTILINE)
-
-            content = content.strip()
+            # Robustly extract the final HTML document from the raw response.
+            # Guarantees a non-empty result and never truncates the document,
+            # even when scratchpad/think tags are malformed or unclosed.
+            content = self._extract_document(content)
             logger.info("_call_llm: cleaned_len=%d", len(content))
             if not content:
                 logger.warning("_call_llm: empty content after cleanup! finish_reason=%s", finish_reason)
@@ -944,6 +1110,7 @@ class AIService:
         case_description: str,
         candidate_laws: list[dict],
         top_k: int = 10,
+        min_keep: int = 0,
     ) -> list[dict]:
         """Use Gemini to rerank candidate laws by relevance to the case.
 
@@ -951,10 +1118,16 @@ class AIService:
         similar vocabulary (~0.83 cosine for everything). This method uses
         the LLM's understanding to evaluate actual semantic relevance.
 
+        The model call runs in a worker thread so it never blocks the event
+        loop, and a backfill step guarantees the result is never near-empty
+        even when the model over-filters (the historical "0 results" bug).
+
         Args:
             case_description: Full case facts / фабула дела
             candidate_laws: List of candidate norms from FAISS/ChromaDB
             top_k: Max results to return
+            min_keep: Floor — always return at least this many norms (backfilled
+                      from the original FAISS order if the model filters too hard)
 
         Returns:
             Filtered and reranked list with AI-assigned scores (0-100)
@@ -1015,13 +1188,14 @@ class AIService:
                 max_output_tokens=4096,
             )
 
-            response = self._client.models.generate_content(
+            response = await asyncio.to_thread(
+                self._client.models.generate_content,
                 model=self.model_name,
                 contents=prompt,
                 config=config,
             )
 
-            raw = response.text.strip()
+            raw = (response.text or "").strip()
             # Extract JSON array from response
             import json
 
@@ -1054,13 +1228,155 @@ class AIService:
                 if len(reranked) >= top_k:
                     break
 
+            ai_relevant = len(reranked)
+
+            # Backfill: never return near-empty results if the model over-filters.
+            # AI's relevant picks stay first; remaining FAISS candidates (original
+            # order) are appended until we reach the min_keep floor.
+            floor = max(min_keep, 0)
+            if len(reranked) < floor:
+                kept_keys = {
+                    (l.get("law_title", l.get("law_name", "")), l.get("article_number", ""))
+                    for l in reranked
+                }
+                for law in candidate_laws:
+                    key = (law.get("law_title", law.get("law_name", "")), law.get("article_number", ""))
+                    if key in kept_keys:
+                        continue
+                    backfilled = dict(law)
+                    backfilled.setdefault("ai_reason", "добавлено для полноты (низкая AI-оценка)")
+                    reranked.append(backfilled)
+                    kept_keys.add(key)
+                    if len(reranked) >= floor:
+                        break
+
             logger.info(
-                "rerank_laws: %d candidates → %d relevant (AI-filtered)",
-                len(candidate_laws), len(reranked),
+                "rerank_laws: %d candidates → %d AI-relevant, %d after backfill (floor=%d)",
+                len(candidate_laws), ai_relevant, len(reranked), floor,
             )
-            return reranked
+            return reranked[:max(top_k, floor)]
 
         except Exception as e:
             logger.warning("rerank_laws failed, returning FAISS results: %s", e)
-            return candidate_laws[:top_k]
+            return candidate_laws[:max(top_k, min_keep)]
+
+    # ── Deep LLM legal-soundness review ───────────────────────────────────
+
+    async def review_quality(
+        self,
+        generated_html: str,
+        facts: str,
+        retrieved_laws: list[dict] | None = None,
+        structured_violations: list[dict] | None = None,
+    ) -> dict:
+        """LLM legal-soundness review of a generated представление.
+
+        Checks substance the regex validators cannot: clarity of the causal
+        chain, violation→measure mapping, addressee justification and factual
+        grounding. Returns a structured dict. On any failure it returns a
+        neutral object with available=False (never raises).
+        """
+        default = {
+            "causal_chain_ok": True,
+            "measures_mapped_ok": True,
+            "addressee_reasoning_ok": True,
+            "grounding_ok": True,
+            "overall": "good",
+            "issues": [],
+            "available": False,
+        }
+        if not generated_html or len(generated_html) < 100:
+            return default
+
+        # Plain-text view of the document for the reviewer
+        doc_text = re.sub(r"<[^>]+>", " ", generated_html)
+        doc_text = re.sub(r"\s+", " ", doc_text).strip()[:12000]
+
+        laws_list = ""
+        for l in (retrieved_laws or [])[:20]:
+            t = l.get("law_title", l.get("law_name", ""))
+            a = l.get("article_number", "")
+            if t:
+                laws_list += f"- {t} ст.{a}\n"
+
+        viol_list = ""
+        for v in (structured_violations or []):
+            d = v.get("description", "")
+            if d:
+                viol_list += f"- {d}\n"
+
+        prompt = f"""Ты — надзирающий прокурор, проверяешь проект представления по ст.200 УПК РК.
+Оцени ЮРИДИЧЕСКОЕ КАЧЕСТВО документа (НЕ форматирование).
+
+## Проект представления
+{doc_text}
+
+## Нормы, которые должны быть применены
+{laws_list or '(не заданы)'}
+
+## Нарушения, указанные следователем
+{viol_list or '(не заданы)'}
+
+## Что проверить
+1. causal_chain_ok: причинно-следственная связь между нарушениями и преступлением изложена ЯВНО и логично (а не декларативно «находятся в прямой связи»).
+2. measures_mapped_ok: каждому выявленному нарушению соответствует конкретная мера в разделе ПРЕДЛАГАЮ.
+3. addressee_reasoning_ok: адресат — организация/лицо, чьи нарушения способствовали преступлению (НЕ полиция/прокуратура/следственный орган), и это согласуется с фабулой.
+4. grounding_ok: в документе нет выдуманных реквизитов (ЕРДР, ФИО, даты, организации), которых нет в фактах; пометки «[не указано]» допустимы.
+
+Верни СТРОГО JSON-объект (без markdown, без комментариев):
+{{"causal_chain_ok":true,"measures_mapped_ok":true,"addressee_reasoning_ok":true,"grounding_ok":true,"overall":"good","issues":[{{"severity":"high","text":"конкретное замечание"}}]}}
+
+issues — только реальные проблемы (до 6 шт.), каждое конкретное и по делу. Поле overall: "poor" если есть проблема severity=high; "warnings" если только medium/low; "good" если проблем нет."""
+
+        try:
+            config = genai_types.GenerateContentConfig(
+                temperature=0.1, top_p=0.9, max_output_tokens=2048,
+            )
+            response = await asyncio.to_thread(
+                self._client.models.generate_content,
+                model=self.model_name,
+                contents=prompt,
+                config=config,
+            )
+            import json
+            raw = (response.text or "").strip()
+            raw = re.sub(r'^```(?:json)?\s*\n', '', raw, flags=re.MULTILINE)
+            raw = re.sub(r'\n```\s*$', '', raw, flags=re.MULTILINE).strip()
+            # Extract the first JSON object if the model added stray text
+            m = re.search(r'\{.*\}', raw, re.DOTALL)
+            if m:
+                raw = m.group(0)
+            data = json.loads(raw)
+
+            issues = []
+            for it in (data.get("issues") or [])[:6]:
+                sev = str(it.get("severity", "low")).lower()
+                if sev not in ("high", "medium", "low"):
+                    sev = "low"
+                txt = str(it.get("text", "")).strip()
+                if txt:
+                    issues.append({"severity": sev, "text": txt[:400]})
+
+            overall = str(data.get("overall", "good")).lower()
+            if overall not in ("good", "warnings", "poor"):
+                # Derive from issues if the model returned something odd
+                if any(i["severity"] == "high" for i in issues):
+                    overall = "poor"
+                elif issues:
+                    overall = "warnings"
+                else:
+                    overall = "good"
+
+            return {
+                "causal_chain_ok": bool(data.get("causal_chain_ok", True)),
+                "measures_mapped_ok": bool(data.get("measures_mapped_ok", True)),
+                "addressee_reasoning_ok": bool(data.get("addressee_reasoning_ok", True)),
+                "grounding_ok": bool(data.get("grounding_ok", True)),
+                "overall": overall,
+                "issues": issues,
+                "available": True,
+            }
+        except Exception as e:
+            logger.warning("review_quality failed: %s", e)
+            return default
 

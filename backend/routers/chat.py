@@ -10,6 +10,7 @@ from fastapi.responses import StreamingResponse, FileResponse
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from config import get_settings
 from database import get_db, async_session
 from models.user import User
 from models.chat import ChatMessage
@@ -26,6 +27,8 @@ from schemas.chat import (
     NormUsageReport,
     NormUsageItem,
     AddresseeCheck,
+    QualityReview,
+    QualityIssue,
 )
 from schemas.legislation import SearchLawsRequest, RetrievedLaw
 from routers.auth import get_current_user
@@ -192,9 +195,14 @@ async def search_laws(
 
         query_text = " ".join(parts) if parts else "представление по ст.200 УПК РК"
 
-    logger.info("search-laws: query_len=%d", len(query_text))
+    settings = get_settings()
+    logger.info("search-laws: query_len=%d ai_rerank=%s", len(query_text), settings.enable_ai_rerank)
 
     laws: list[dict] = []
+
+    # When AI rerank is on, fetch a wider candidate pool so the reranker has
+    # enough to choose from; otherwise return the FAISS top-15 directly.
+    fetch_k = settings.ai_rerank_candidates if settings.enable_ai_rerank else 15
 
     # Search FAISS-indexed enriched JSONL norms (primary source, 21k+ records)
     # Uses multi-query decomposition for better recall of relevant norms
@@ -203,7 +211,7 @@ async def search_laws(
         logger.info("search-laws: FAISS index=%s records=%d",
                      rag_laws._index is not None,
                      len(rag_laws._records) if rag_laws._records else 0)
-        jsonl_norms = rag_laws.search_multi_query(facts=query_text[:3000], top_k=15)
+        jsonl_norms = rag_laws.search_multi_query(facts=query_text[:3000], top_k=fetch_k)
         logger.info("search-laws: FAISS returned %d norms", len(jsonl_norms))
         for norm in jsonl_norms:
             laws.append({
@@ -227,6 +235,28 @@ async def search_laws(
     # podactov (transport, housing, mass-media, banking laws) that
     # drown out relevant FAISS codex results. FAISS has 21,462 codex norms.
     # Re-enable when ChromaDB is populated with relevant laws only.
+
+    # ── AI semantic rerank ──────────────────────────────────────────────
+    # Lexical/embedding search surfaces false-positives because legal norms
+    # share vocabulary. Gemini reorders by true relevance and drops noise.
+    # Backfill (min_keep) guarantees we never return an empty list.
+    if settings.enable_ai_rerank and len(laws) > 1:
+        try:
+            ai = AIService()
+            reranked = await ai.rerank_laws(
+                case_description=query_text,
+                candidate_laws=laws,
+                top_k=15,
+                min_keep=settings.ai_rerank_min_keep,
+            )
+            if reranked:
+                laws = reranked
+            logger.info("search-laws: AI rerank → %d laws", len(laws))
+        except Exception as e:
+            logger.warning("search-laws: AI rerank failed, using FAISS order: %s", e)
+            laws = laws[:15]
+    else:
+        laws = laws[:15]
 
     logger.info("search-laws: returning %d total laws", len(laws))
     return [RetrievedLaw(**law) for law in laws]
@@ -338,9 +368,14 @@ async def generate_document(
     # Combine user additional instructions with explicit case data reminder
     enriched_instructions = (
         (data.additional_instructions or "") + "\n\n"
-        "ВАЖНО: Используй ТОЛЬКО реальные данные из раздела '## Факты из материалов дела'. "
-        "Никаких заглушек (___, ???, [заполнить]). "
-        "Если данные есть в тексте — обязательно вставь их в документ."
+        "ВАЖНО про реквизиты:\n"
+        "• Используй ТОЛЬКО реальные данные из раздела «## Факты текущего дела». "
+        "Если данные есть в тексте — обязательно вставь их в документ.\n"
+        "• НИКОГДА не выдумывай реквизиты (ЕРДР, ФИО, даты, организации), которых нет в фактах.\n"
+        "• Запрещены пустые «болванки» для заполнения вручную: ___, ???, [заполнить], …\n"
+        "• Если реквизит действительно отсутствует в фактах — используй явную пометку "
+        "в квадратных скобках по правилам REPRESENTATION_RULES "
+        "(например «№ [ЕРДР не указан]», «[ФИО не установлено]»), а не пустой прочерк."
     ).strip()
 
     try:
@@ -514,6 +549,29 @@ async def generate_document(
             validation = validate_representation(generated)
             citation_check = validate_law_citations(generated, retrieved_laws)
 
+    # ── Deep LLM legal-soundness review ─────────────────────────────────
+    # Goes beyond regex markers: causal chain, violation→measure mapping,
+    # addressee justification, factual grounding. Non-fatal — never blocks.
+    quality_review = {
+        "causal_chain_ok": True, "measures_mapped_ok": True,
+        "addressee_reasoning_ok": True, "grounding_ok": True,
+        "overall": "good", "issues": [], "available": False,
+    }
+    try:
+        quality_review = await ai.review_quality(
+            generated_html=generated,
+            facts=case_context_str,
+            retrieved_laws=retrieved_laws,
+            structured_violations=sv_dicts,
+        )
+        logger.info(
+            "generate_document: quality_review overall=%s issues=%d available=%s",
+            quality_review.get("overall"), len(quality_review.get("issues", [])),
+            quality_review.get("available"),
+        )
+    except Exception as e:
+        logger.warning("generate_document: quality review failed: %s", e)
+
     # Auto-save as Representation record
     rep_title = (
         f"Представление — {data.template_name}"
@@ -538,6 +596,7 @@ async def generate_document(
         **validation,
         "norm_usage": norm_check,
         "addressee": addressee_check,
+        "quality_review": quality_review,
         "generation_metadata": generation_metadata,
     }
 
@@ -586,6 +645,15 @@ async def generate_document(
             unused=[NormUsageItem(**n) for n in norm_check["unused"]],
         ),
         addressee_check=AddresseeCheck(**addressee_check),
+        quality_review=QualityReview(
+            causal_chain_ok=quality_review.get("causal_chain_ok", True),
+            measures_mapped_ok=quality_review.get("measures_mapped_ok", True),
+            addressee_reasoning_ok=quality_review.get("addressee_reasoning_ok", True),
+            grounding_ok=quality_review.get("grounding_ok", True),
+            overall=quality_review.get("overall", "good"),
+            issues=[QualityIssue(**i) for i in quality_review.get("issues", [])],
+            available=quality_review.get("available", False),
+        ),
     )
 
 

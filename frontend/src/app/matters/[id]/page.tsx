@@ -7,7 +7,7 @@ import Navbar from "@/components/Navbar";
 import FilesSidebar from "@/components/FilesSidebar";
 import ChatPanel from "@/components/ChatPanel";
 import DocumentEditor from "@/components/DocumentEditor";
-import { Matter, FileItem, ChatMessage, Template, KBStats, RetrievedLaw, CitationCheck, StructuredViolation } from "@/types";
+import { Matter, FileItem, ChatMessage, Template, KBStats, RetrievedLaw, CitationCheck, StructuredViolation, QualityReview } from "@/types";
 import {
   Loader2,
   MessageSquare,
@@ -67,6 +67,7 @@ export default function MatterDetailPage() {
   const [citationCheck, setCitationCheck] = useState<CitationCheck | null>(null);
   const [normUsage, setNormUsage] = useState<{ all_used: boolean; used: { law: string; article: string }[]; unused: { law: string; article: string }[] } | null>(null);
   const [addresseeCheck, setAddresseeCheck] = useState<{ ok: boolean; reason: string } | null>(null);
+  const [qualityReview, setQualityReview] = useState<QualityReview | null>(null);
   const [currentRepId, setCurrentRepId] = useState<string | null>(null);
   const [editorSaving, setEditorSaving] = useState(false);
   const [editorLastSaved, setEditorLastSaved] = useState("");
@@ -210,6 +211,7 @@ export default function MatterDetailPage() {
     setGenError("");
     setValidationResult(null);
     setCitationCheck(null);
+    setQualityReview(null);
     setActiveTab("editor");
     try {
       // Filter laws by user selection and pass to backend
@@ -241,6 +243,7 @@ export default function MatterDetailPage() {
         citation_check?: CitationCheck;
         norm_usage?: { all_used: boolean; used: { law: string; article: string }[]; unused: { law: string; article: string }[] };
         addressee_check?: { ok: boolean; reason: string };
+        quality_review?: QualityReview;
       };
       setEditorContent(res.content);
       if (res.representation_id) setCurrentRepId(res.representation_id);
@@ -248,6 +251,7 @@ export default function MatterDetailPage() {
       if (res.citation_check) setCitationCheck(res.citation_check);
       if (res.norm_usage) setNormUsage(res.norm_usage);
       if (res.addressee_check) setAddresseeCheck(res.addressee_check);
+      if (res.quality_review) setQualityReview(res.quality_review);
       await refreshMessages();
     } catch (e: any) {
       setGenError(e.message);
@@ -761,6 +765,57 @@ export default function MatterDetailPage() {
                     <div>
                       <p className="font-medium">⚠️ Неправильный адресат</p>
                       <p className="mt-0.5">{addresseeCheck.reason}</p>
+                    </div>
+                  </div>
+                )}
+
+                {/* Deep legal-soundness review */}
+                {qualityReview && qualityReview.available && !generating && (
+                  <div
+                    className={`flex items-start gap-2 px-4 py-2.5 rounded-lg text-xs ${qualityReview.overall === "good"
+                        ? "bg-green-50 border border-green-200 text-green-800"
+                        : qualityReview.overall === "warnings"
+                          ? "bg-amber-50 border border-amber-200 text-amber-800"
+                          : "bg-red-50 border border-red-200 text-red-800"
+                      }`}
+                  >
+                    {qualityReview.overall === "good" ? (
+                      <CheckCircle2 className="w-4 h-4 text-green-500 flex-shrink-0 mt-0.5" />
+                    ) : (
+                      <BrainCircuit className={`w-4 h-4 flex-shrink-0 mt-0.5 ${qualityReview.overall === "poor" ? "text-red-500" : "text-amber-500"}`} />
+                    )}
+                    <div className="flex-1">
+                      <p className="font-medium">
+                        {qualityReview.overall === "good"
+                          ? "Юридическая проверка пройдена: причинно-следственная связь, меры и адресат согласованы"
+                          : qualityReview.overall === "poor"
+                            ? "Юридическая проверка: выявлены серьёзные замечания"
+                            : "Юридическая проверка: есть замечания к содержанию"}
+                      </p>
+                      {!qualityReview.causal_chain_ok && (
+                        <p className="mt-0.5">• Причинно-следственная связь изложена недостаточно явно</p>
+                      )}
+                      {!qualityReview.measures_mapped_ok && (
+                        <p className="mt-0.5">• Не каждому нарушению соответствует мера в разделе ПРЕДЛАГАЮ</p>
+                      )}
+                      {!qualityReview.addressee_reasoning_ok && (
+                        <p className="mt-0.5">• Выбор адресата слабо обоснован фабулой</p>
+                      )}
+                      {!qualityReview.grounding_ok && (
+                        <p className="mt-0.5">• Возможны реквизиты, не подтверждённые материалами дела</p>
+                      )}
+                      {qualityReview.issues.length > 0 && (
+                        <ul className="mt-1 space-y-0.5">
+                          {qualityReview.issues.map((it, i) => (
+                            <li key={i}>
+                              <span className="font-semibold">
+                                {it.severity === "high" ? "⛔" : it.severity === "medium" ? "⚠️" : "ℹ️"}
+                              </span>{" "}
+                              {it.text}
+                            </li>
+                          ))}
+                        </ul>
+                      )}
                     </div>
                   </div>
                 )}

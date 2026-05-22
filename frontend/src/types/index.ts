@@ -121,6 +121,21 @@ export interface CitationCheck {
   unverified: string[];
 }
 
+export interface QualityIssue {
+  severity: "high" | "medium" | "low";
+  text: string;
+}
+
+export interface QualityReview {
+  causal_chain_ok: boolean;
+  measures_mapped_ok: boolean;
+  addressee_reasoning_ok: boolean;
+  grounding_ok: boolean;
+  overall: "good" | "warnings" | "poor";
+  issues: QualityIssue[];
+  available: boolean;
+}
+
 export interface RepresentationItem {
   id: string;
   matter_id: string;

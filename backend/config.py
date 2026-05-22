@@ -13,6 +13,14 @@ class Settings(BaseSettings):
     ai_model: str = "gemini-2.5-flash"
     embedding_model: str = "intfloat/multilingual-e5-base"
 
+    # AI-powered semantic reranking of retrieved legal norms.
+    # When enabled, Gemini reorders FAISS candidates by true relevance to the
+    # case, filtering out lexical false-positives. Backfill guarantees results
+    # are never empty even if the model over-filters.
+    enable_ai_rerank: bool = True
+    ai_rerank_candidates: int = 20   # how many FAISS candidates to send to the reranker
+    ai_rerank_min_keep: int = 6      # floor: always keep at least this many results
+
     # Vertex AI settings (used when ai_api_key is empty)
     vertex_ai_project: str = ""
     vertex_ai_location: str = "us-central1"

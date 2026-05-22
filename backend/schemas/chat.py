@@ -91,6 +91,22 @@ class AddresseeCheck(BaseModel):
     reason: str = ""
 
 
+class QualityIssue(BaseModel):
+    severity: str = "low"   # high | medium | low
+    text: str = ""
+
+
+class QualityReview(BaseModel):
+    """Deep LLM legal-soundness review of the generated document."""
+    causal_chain_ok: bool = True
+    measures_mapped_ok: bool = True
+    addressee_reasoning_ok: bool = True
+    grounding_ok: bool = True
+    overall: str = "good"   # good | warnings | poor
+    issues: List[QualityIssue] = []
+    available: bool = False  # False when the review could not run
+
+
 class GenerateDocumentResponse(BaseModel):
     content: str
     template_name: Optional[str] = None
@@ -100,4 +116,5 @@ class GenerateDocumentResponse(BaseModel):
     citation_check: Optional[CitationCheckResponse] = None
     norm_usage: Optional[NormUsageReport] = None
     addressee_check: Optional[AddresseeCheck] = None
+    quality_review: Optional[QualityReview] = None
 
