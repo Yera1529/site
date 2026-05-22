@@ -12,7 +12,7 @@ COPY requirements.txt .
 
 # Install PyTorch CPU-only FIRST (~250 MB vs ~2 GB CUDA version)
 # This prevents pip from downloading the full CUDA PyTorch when installing sentence-transformers
-RUN pip install --no-cache-dir \
+RUN pip install --no-cache-dir --default-timeout=300 --retries 3 \
     torch==2.5.1+cpu \
     --extra-index-url https://download.pytorch.org/whl/cpu
 
