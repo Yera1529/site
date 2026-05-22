@@ -6,18 +6,13 @@ WORKDIR /app
 RUN apt-get update && apt-get install -y --no-install-recommends \
     build-essential \
     libgomp1 \
+    curl \
     && rm -rf /var/lib/apt/lists/*
 
 COPY requirements.txt .
 
-# Install PyTorch CPU-only FIRST (~250 MB vs ~2 GB CUDA version)
-# This prevents pip from downloading the full CUDA PyTorch when installing sentence-transformers
-RUN pip install --no-cache-dir --default-timeout=300 --retries 3 \
-    torch==2.5.1+cpu \
-    --extra-index-url https://download.pytorch.org/whl/cpu
-
-# Install remaining dependencies
-RUN pip install --no-cache-dir -r requirements.txt
+# Install all dependencies (torch will be pulled from PyPI by sentence-transformers)
+RUN pip install --no-cache-dir --default-timeout=300 -r requirements.txt
 
 COPY . .
 
