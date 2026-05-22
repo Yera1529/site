@@ -289,8 +289,26 @@ export default function MatterDetailPage() {
 
   if (loading) {
     return (
-      <div className="min-h-screen flex items-center justify-center">
-        <Loader2 className="w-8 h-8 animate-spin text-brand-600" />
+      <div className="min-h-screen bg-slate-950 flex flex-col items-center justify-center text-white relative overflow-hidden font-sans">
+        {/* Neon light glows */}
+        <div className="absolute top-1/4 left-1/4 w-96 h-96 bg-brand-500/10 rounded-full blur-3xl" />
+        <div className="absolute bottom-1/4 right-1/4 w-96 h-96 bg-emerald-500/5 rounded-full blur-3xl" />
+
+        <div className="relative flex flex-col items-center max-w-sm px-6 text-center animate-pulse">
+          <div className="relative w-20 h-20 mb-6 flex items-center justify-center">
+            <div className="absolute inset-0 rounded-full border border-brand-500/30 animate-spin-slow" />
+            <div className="absolute inset-2 rounded-full border border-dashed border-emerald-500/20 animate-spin" />
+            <div className="relative w-12 h-12 rounded-full bg-brand-950 border border-brand-500/30 flex items-center justify-center shadow-[0_0_20px_rgba(0,51,170,0.4)]">
+              <BrainCircuit className="w-6 h-6 text-brand-400 animate-pulse" />
+            </div>
+          </div>
+          <h3 className="text-lg font-bold bg-gradient-to-r from-blue-400 to-emerald-400 bg-clip-text text-transparent">
+            Синхронизация кабинета
+          </h3>
+          <p className="text-xs text-slate-400 mt-2 leading-relaxed">
+            Загрузка материалов уголовного дела и подключение ИИ-анализатора...
+          </p>
+        </div>
       </div>
     );
   }

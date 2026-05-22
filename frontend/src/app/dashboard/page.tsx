@@ -109,15 +109,21 @@ export default function DashboardPage() {
       setCreationProgress(100);
       await new Promise((r) => setTimeout(r, 600));
 
-      // Clear states and redirect
-      setNewName("");
-      setNewDesc("");
-      setShowCreate(false);
-      setCreating(false);
-      setCreationStep(0);
-      setCreationProgress(0);
-
+      // Visual transitioning phase to keep the modal open during router dynamic compile & fetch
+      setCreationStep(6);
+      
+      // Perform route push!
       router.push(`/matters/${createdMatterId}`);
+
+      // Async clean up of form inputs and states after transition has likely started/finished
+      setTimeout(() => {
+        setNewName("");
+        setNewDesc("");
+        setShowCreate(false);
+        setCreating(false);
+        setCreationStep(0);
+        setCreationProgress(0);
+      }, 5000);
     };
 
     const handleCreationFailure = (errMsg: string) => {
@@ -210,11 +216,11 @@ export default function DashboardPage() {
                       <BrainCircuit className="w-8 h-8 text-brand-400 animate-pulse" />
                     </div>
                   </div>
-                  <h3 className="text-xl font-bold mt-4 bg-gradient-to-r from-blue-400 via-indigo-200 to-emerald-400 bg-clip-text text-transparent">
-                    Инициализация ПредставлениеAi
+                  <h3 className="text-xl font-bold mt-4 bg-gradient-to-r from-blue-400 via-indigo-200 to-emerald-400 bg-clip-text text-transparent transition-all duration-300">
+                    {creationStep === 6 ? "Вход в ИИ-кабинет..." : "Инициализация ПредставлениеAi"}
                   </h3>
-                  <p className="text-xs text-brand-300 mt-1 uppercase tracking-widest font-semibold">
-                    ИИ-анализатор уголовных дел
+                  <p className="text-xs text-brand-300 mt-1 uppercase tracking-widest font-semibold animate-pulse">
+                    {creationStep === 6 ? "Запуск рабочего пространства" : "ИИ-анализатор уголовных дел"}
                   </p>
                 </div>
 
