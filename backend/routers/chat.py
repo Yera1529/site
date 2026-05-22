@@ -176,24 +176,36 @@ async def search_laws(
     """
     matter = await get_authorized_matter(data.matter_id, user, db)
 
+    parts = []
+    if matter.name:
+        parts.append(f"Дело: {matter.name}")
+    if matter.description:
+        parts.append(f"Фабула: {matter.description[:1000]}")
+    if matter.custom_instructions:
+        parts.append(f"Указания: {matter.custom_instructions[:500]}")
+
+    result = await db.execute(select(File).where(File.matter_id == data.matter_id))
+    files = result.scalars().all()
+    facts = " ".join(f.extracted_text for f in files if f.extracted_text)
+    if facts:
+        parts.append(f"Материалы: {facts[:3000]}")
+
+    background_text = " ".join(parts) if parts else ""
+
+    base_facts_text = background_text if background_text else "представление по ст.200 УПК РК"
     if data.query and data.query.strip():
-        query_text = data.query.strip()
-    else:
-        parts = []
-        if matter.name:
-            parts.append(f"Дело: {matter.name}")
-        if matter.description:
-            parts.append(f"Фабула: {matter.description[:1000]}")
-        if matter.custom_instructions:
-            parts.append(f"Указания: {matter.custom_instructions[:500]}")
+        base_facts_text = f"{data.query.strip()} {base_facts_text[:1500]}"
 
-        result = await db.execute(select(File).where(File.matter_id == data.matter_id))
-        files = result.scalars().all()
-        facts = " ".join(f.extracted_text for f in files if f.extracted_text)
-        if facts:
-            parts.append(f"Материалы: {facts[:3000]}")
-
-        query_text = " ".join(parts) if parts else "представление по ст.200 УПК РК"
+    violations = data.violations or []
+    viol_text = " ".join(
+        f"Нарушение: {v.get('description','')}. Ответственный: {v.get('responsible','')}. "
+        f"Связь: {v.get('link_to_crime','')}."
+        for v in violations if v.get('description')
+    )
+    # query_text: нарушения первыми, потом фабула/материалы
+    query_text = (viol_text + " " + base_facts_text).strip() if viol_text else base_facts_text
+    if data.addressee:
+        query_text = f"Адресат: {data.addressee}. " + query_text
 
     settings = get_settings()
     logger.info("search-laws: query_len=%d ai_rerank=%s", len(query_text), settings.enable_ai_rerank)
@@ -211,7 +223,12 @@ async def search_laws(
         logger.info("search-laws: FAISS index=%s records=%d",
                      rag_laws._index is not None,
                      len(rag_laws._records) if rag_laws._records else 0)
-        jsonl_norms = rag_laws.search_multi_query(facts=query_text[:3000], top_k=fetch_k)
+        jsonl_norms = rag_laws.search_multi_query(
+            facts=query_text[:3000],
+            top_k=fetch_k,
+            raw_query=data.query,
+            violations=data.violations,
+        )
         logger.info("search-laws: FAISS returned %d norms", len(jsonl_norms))
         for norm in jsonl_norms:
             laws.append({
@@ -253,7 +270,7 @@ async def search_laws(
                 laws = reranked
             logger.info("search-laws: AI rerank → %d laws", len(laws))
         except Exception as e:
-            logger.warning("search-laws: AI rerank failed, using FAISS order: %s", e)
+            logger.exception("search-laws: AI rerank FAILED")
             laws = laws[:15]
     else:
         laws = laws[:15]
@@ -303,6 +320,11 @@ async def generate_document(
         law_query = all_text[:4000]
         if matter.description:
             law_query = f"{matter.description[:1000]} {law_query}"
+        viols_text = None
+        if data.structured_violations:
+            viols_text = " ".join(v.description for v in data.structured_violations if v.description)
+            if viols_text.strip():
+                law_query = f"{viols_text.strip()} {law_query}"
         # Search ChromaDB legislation (existing indexed laws)
         retrieved_laws = rag.search_relevant_laws(law_query, top_k=10)
 
@@ -317,6 +339,7 @@ async def generate_document(
                 facts=law_query[:3000],
                 top_k=10,
                 organ_filter=organ_hint,
+                raw_query=viols_text,
             )
             # Merge JSONL norms with ChromaDB results, deduplicating by law+article
             seen_keys = {

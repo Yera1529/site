@@ -355,11 +355,24 @@ export const api = {
   },
 
   // Search laws (for generation wizard)
-  searchLaws: (matterId: string, query?: string) =>
+  searchLaws: (
+    matterId: string,
+    opts?: {
+      query?: string;
+      violations?: { description: string; responsible: string; link_to_crime: string }[];
+      addressee?: string;
+    }
+  ) =>
     request("/api/search-laws", {
       method: "POST",
-      body: JSON.stringify({ matter_id: matterId, query: query || "" }),
+      body: JSON.stringify({
+        matter_id: matterId,
+        query: opts?.query || "",
+        violations: opts?.violations || null,
+        addressee: opts?.addressee || null,
+      }),
     }),
+
 
   // Representations
   listRepresentations: (matterId?: string, status?: string) => {

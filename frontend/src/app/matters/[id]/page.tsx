@@ -228,7 +228,11 @@ export default function MatterDetailPage() {
   const handleSearchLaws = async () => {
     setSearchingLaws(true);
     try {
-      const laws = (await api.searchLaws(matterId)) as RetrievedLaw[];
+      const violsToSend = violations.filter(v => v.description.trim());
+      const laws = (await api.searchLaws(matterId, {
+        violations: violsToSend.length ? violsToSend : undefined,
+        addressee: addresseeOverride.trim() || undefined,
+      })) as RetrievedLaw[];
       setRetrievedLaws(laws);
       setSelectedLaws(new Set(laws.map((_, i) => i)));
       setWizardStep(3);
@@ -238,6 +242,7 @@ export default function MatterDetailPage() {
       setSearchingLaws(false);
     }
   };
+
 
   const handleGenerate = async () => {
     setShowGenDialog(false);

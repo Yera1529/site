@@ -49,3 +49,6 @@ class RetrievedLaw(BaseModel):
 class SearchLawsRequest(BaseModel):
     matter_id: uuid.UUID
     query: Optional[str] = ""
+    violations: Optional[List[dict]] = None   # [{description, responsible, link_to_crime}]
+    addressee: Optional[str] = None
+

@@ -18,7 +18,7 @@ class Settings(BaseSettings):
     # case, filtering out lexical false-positives. Backfill guarantees results
     # are never empty even if the model over-filters.
     enable_ai_rerank: bool = True
-    ai_rerank_candidates: int = 20   # how many FAISS candidates to send to the reranker
+    ai_rerank_candidates: int = 40   # how many FAISS candidates to send to the reranker
     ai_rerank_min_keep: int = 6      # floor: always keep at least this many results
 
     # Vertex AI settings (used when ai_api_key is empty)

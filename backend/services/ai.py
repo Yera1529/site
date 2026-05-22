@@ -1137,7 +1137,7 @@ class AIService:
 
         # Build compact representations for each candidate
         law_entries = []
-        for i, law in enumerate(candidate_laws[:30]):  # Limit to 30 candidates
+        for i, law in enumerate(candidate_laws[:40]):  # Send up to 40 candidates
             title = law.get("law_title", law.get("law_name", ""))
             article = law.get("article_number", "")
             text = law.get("text", law.get("original_text", ""))[:400]
@@ -1155,7 +1155,7 @@ class AIService:
 
         laws_block = "\n---\n".join(law_entries)
 
-        prompt = f"""Ты — эксперт по законодательству Республики Казахстан. Тебе даны факты уголовного дела и список кандидатных правовых норм.
+        prompt = f"""Ты подбираешь нормы для представления по ст.200 УПК РК (устранение причин и условий преступления).
 
 ## Факты дела
 {case_description[:4000]}
@@ -1164,28 +1164,33 @@ class AIService:
 {laws_block}
 
 ## Задача
-Оцени релевантность КАЖДОЙ нормы к данному делу. Норма релевантна, если:
-- Она регулирует деятельность организации/лица, чьё нарушение привело к преступлению
-- Она устанавливает обязанности, которые были нарушены
-- Она относится к сфере, связанной с обстоятельствами дела
+Нужны нормы, которые нарушил АДРЕСАТ — обязанности организации/должностного лица, создавшие условия для преступления, с опорой на указанные следователем нарушения.
 
-Ответь СТРОГО в формате JSON-массива. Каждый элемент:
-{{"index": <номер нормы>, "score": <0-100>, "reason": "<краткое обоснование>"}}
+Оцени релевантность КАЖДОЙ нормы 0–100, используя ВЕСЬ диапазон; не ставь одинаковые баллы.
 
-Где score:
-- 80-100: норма прямо относится к делу
-- 50-79: норма косвенно связана
-- 20-49: слабая связь
+Правила оценки:
+- 80-100: норма прямо устанавливает обязанность адресата, нарушение которой создало условия для преступления
+- 50-79: норма косвенно связана с обязанностями адресата в контексте дела
+- 20-49: слабая связь с делом
 - 0-19: не относится к делу
 
-Включи ТОЛЬКО нормы со score >= 30. Сортируй по убыванию score.
-Ответ — ТОЛЬКО JSON-массив, без комментариев."""
+КРИТИЧЕСКИ ВАЖНО — следующие категории это НЕ нарушенные адресатом нормы, ставь им 0:
+- Статьи Уголовного кодекса (квалификация деяния подозреваемого)
+- Ст.200 Уголовно-процессуального кодекса (процессуальное основание представления)
+- КоАП ст.479 и ст.664 (ответственность за неисполнение представления — цитируются в конце документа, а не как нарушенные нормы)
+
+Нормы из несвязанных сфер (например, налоговый кодекс для дела о нападении, семейный кодекс для дела о краже, уголовно-исполнительный кодекс для дела об алкоголе) — ниже 20.
+
+Включи ТОЛЬКО нормы со score >= 20. Сортируй по убыванию score.
+Ответ — СТРОГО JSON-массив, без комментариев:
+[{{"index": <номер нормы>, "score": <0-100>, "reason": "<краткое обоснование>"}}]"""
 
         try:
             config = genai_types.GenerateContentConfig(
                 temperature=0.1,
                 top_p=0.9,
-                max_output_tokens=4096,
+                max_output_tokens=65536,
+                response_mime_type="application/json",
             )
 
             response = await asyncio.to_thread(
@@ -1217,12 +1222,13 @@ class AIService:
                 ai_score = item.get("score", 0)
                 reason = item.get("reason", "")
 
-                if idx < 0 or idx >= len(candidate_laws) or ai_score < 30:
+                if idx < 0 or idx >= len(candidate_laws) or ai_score < 20:
                     continue
 
                 law = dict(candidate_laws[idx])
-                law["score"] = round(ai_score / 100.0, 2)  # Normalize to 0-1
+                law["score"] = round(ai_score / 100.0, 4)  # Normalize to 0-1, 4 decimals for variance
                 law["ai_reason"] = reason
+                law["_rerank_source"] = "ai"
                 reranked.append(law)
 
                 if len(reranked) >= top_k:
@@ -1245,6 +1251,7 @@ class AIService:
                         continue
                     backfilled = dict(law)
                     backfilled.setdefault("ai_reason", "добавлено для полноты (низкая AI-оценка)")
+                    backfilled["_rerank_source"] = "faiss_backfill"
                     reranked.append(backfilled)
                     kept_keys.add(key)
                     if len(reranked) >= floor:
