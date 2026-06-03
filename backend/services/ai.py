@@ -1182,12 +1182,15 @@ class AIService:
 Нормы из несвязанных сфер (например, налоговый кодекс для дела о нападении, семейный кодекс для дела о краже, уголовно-исполнительный кодекс для дела об алкоголе) — ниже 20.
 
 Включи ТОЛЬКО нормы со score >= 20. Сортируй по убыванию score.
+ВАЖНО — РАЗНООБРАЗИЕ: для представления нужны нарушенные обязанности из РАЗНЫХ
+нормативных актов. НЕ заполняй список множеством статей одного закона — выбирай
+1–2 сильнейшие статьи из каждого релевантного закона, охватывая разные акты.
 Ответ — СТРОГО JSON-массив, без комментариев:
 [{{"index": <номер нормы>, "score": <0-100>, "reason": "<краткое обоснование>"}}]"""
 
         try:
             config = genai_types.GenerateContentConfig(
-                temperature=0.1,
+                temperature=0.0,
                 top_p=0.9,
                 max_output_tokens=65536,
                 response_mime_type="application/json",
@@ -1215,8 +1218,14 @@ class AIService:
                 logger.warning("rerank_laws: unexpected response format")
                 return candidate_laws[:top_k]
 
-            # Map AI rankings back to original candidate laws
+            # Map AI rankings back to original candidate laws.
+            # Диверсификация (Фаза 5): не более MAX_PER_LAW статей одного закона в
+            # выдаче — иначе «магнит» (напр. Трудовой кодекс) занимает все слоты и
+            # вытесняет нарушенные нормы других актов. Для представления нужны
+            # обязанности из РАЗНЫХ нормативных актов.
+            MAX_PER_LAW = 2
             reranked = []
+            law_counts: dict[str, int] = {}
             for item in rankings:
                 idx = item.get("index", -1)
                 ai_score = item.get("score", 0)
@@ -1226,6 +1235,10 @@ class AIService:
                     continue
 
                 law = dict(candidate_laws[idx])
+                ln = law.get("law_title", law.get("law_name", ""))
+                if law_counts.get(ln, 0) >= MAX_PER_LAW:
+                    continue  # diversity cap
+                law_counts[ln] = law_counts.get(ln, 0) + 1
                 law["score"] = round(ai_score / 100.0, 4)  # Normalize to 0-1, 4 decimals for variance
                 law["ai_reason"] = reason
                 law["_rerank_source"] = "ai"

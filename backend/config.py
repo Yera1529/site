@@ -21,6 +21,11 @@ class Settings(BaseSettings):
     ai_rerank_candidates: int = 40   # how many FAISS candidates to send to the reranker
     ai_rerank_min_keep: int = 6      # floor: always keep at least this many results
 
+    # L1 Domain Router (Фаза 3): классифицирует дело в домен и ограничивает
+    # подбор норм пулом источников этого домена — убирает кросс-доменные «магниты»
+    # (напр. Трудовой кодекс на делах охраны). На ошибке — fallback к полному поиску.
+    enable_domain_router: bool = True
+
     # Vertex AI settings (used when ai_api_key is empty)
     vertex_ai_project: str = ""
     vertex_ai_location: str = "us-central1"

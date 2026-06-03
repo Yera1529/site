@@ -18,6 +18,18 @@ backend/storage/uploads/
 backend/storage/generated/
 backend/storage/chroma_db/
 
+# Regenerable FAISS/BM25 index caches (built from jsonl)
+backend/storage/faiss_laws/
+backend/storage/laws/
+backend/storage_curated/
+
+# Eval run outputs (regenerable) and scratch
+eval/results/
+backend/scratch/
+
+# Локальный docker-compose override (перенаправляет фронт на локальный backend) — не деплоить
+docker-compose.override.yml
+
 # IDE
 .vscode/
 .idea/

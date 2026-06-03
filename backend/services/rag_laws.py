@@ -14,6 +14,7 @@ import json
 import logging
 import os
 import pickle
+import re
 from pathlib import Path
 from typing import Optional
 
@@ -45,6 +46,25 @@ _JSONL_CANDIDATES = [
 
 
 import threading
+
+
+_SOURCE_PAT_CACHE: dict[str, list] = {}
+
+
+def _source_matches(law_name: str, patterns: list[str] | None) -> bool:
+    """Принадлежит ли law_name любому из regex-паттернов источников (пул домена).
+
+    Пустой/None список = без ограничения (True). Компиляция паттернов кэшируется.
+    """
+    if not patterns:
+        return True
+    key = "\x00".join(patterns)
+    compiled = _SOURCE_PAT_CACHE.get(key)
+    if compiled is None:
+        compiled = [re.compile(p, re.IGNORECASE) for p in patterns]
+        _SOURCE_PAT_CACHE[key] = compiled
+    ln = law_name or ""
+    return any(rx.search(ln) for rx in compiled)
 
 
 class RAGLawsService:
@@ -372,6 +392,7 @@ class RAGLawsService:
         query: str,
         top_k: int = 5,
         organ_filter: str | None = None,
+        source_patterns: list[str] | None = None,
     ) -> list[dict]:
         """Search for relevant legal norms given a case description.
 
@@ -479,8 +500,12 @@ class RAGLawsService:
         )
         q_vec = np.array(q_vec, dtype=np.float32)
 
-        # Fetch broad candidate set
-        fetch_k = min(max(top_k * 10, 100), self._index.ntotal)
+        # Fetch broad candidate set. При доменном фильтре берём шире, чтобы
+        # профильные нормы домена точно попали в выборку до фильтрации.
+        if source_patterns:
+            fetch_k = min(3000, self._index.ntotal)
+        else:
+            fetch_k = min(max(top_k * 10, 100), self._index.ntotal)
         faiss_scores, faiss_indices = self._index.search(q_vec, fetch_k)
 
         # ── Step 3: BM25 keyword scoring + hybrid ranking ──────────────
@@ -500,6 +525,10 @@ class RAGLawsService:
                     organ = sc.get("organ", "")
                 if not self._organ_matches(organ, organ_filter):
                     continue
+
+            # Domain source filter (Фаза 3): оставляем только пул источников домена
+            if source_patterns and not _source_matches(rec.get("law_name", ""), source_patterns):
+                continue
 
             # Build searchable text from record
             rec_text = (
@@ -569,59 +598,12 @@ class RAGLawsService:
                 "_kw_hits": keyword_hits,
             })
 
-        # ── Targeted Injection: KoAP 200 (alcohol) ────────────────────────
-        # TODO: заменить на retrieval — это единственная оставшаяся инъекция,
-        # сохранена потому что FAISS часто не находит её из-за лексического разрыва
-        # между "продажа спиртных напитков" и "реализация алкогольной продукции".
-        analysis_text = (query + " " + q_lower).lower()
-
-        def has_art(art_str):
-            return art_str in article_nums
-
-        def has_kw(*words):
-            return self._has_word(analysis_text, *words)
-
-        if (has_art("200") and has_kw("коап", "административ")) or (
-            has_kw("алкогол", "пиво", "водка", "спиртн", "бутылк") and (
-                has_kw("несовершеннолет", "21 года", "подрост", "ресторан", "кафе", "бар", "жасқа толмаған") or
-                has_kw("23:00", "23", "21:00", "21", "ноч", "ночн", "время", "универсам", "магазин", "реализац", "продаж")
-            )
-        ):
-            inj = {
-                "law_name": "Кодекс об административных правонарушениях",
-                "article_number": "200",
-                "original_text": "Статья 200 Кодекса Республики Казахстан об административных правонарушениях. Нарушение требований законодательства Республики Казахстан по реализации алкогольной продукции.",
-                "violation_criteria": "Реализация алкогольной продукции лицам в возрасте до двадцати одного года, а также розничная реализация алкогольной продукции в неустановленное время (с 23 до 8 часов следующего дня; с объемной долей этилового спирта свыше тридцати процентов с 21 до 12 часов следующего дня).",
-                "applicable_measures": "Наказывается штрафом на физических и юридических лиц с приостановлением действия лицензии.",
-                "norm_type": "Запрещающая"
-            }
-            rec_text = (
-                inj["violation_criteria"] + " " + inj["original_text"] + " " +
-                inj["applicable_measures"] + " " + inj["law_name"] + " " + inj["article_number"]
-            ).lower()
-            kw_hits_inj = sum(1 + (0.5 if len(kw) >= 6 else 0) for kw in query_words if kw in rec_text)
-            bm25_inj = min(kw_hits_inj / max(len(query_words) * 0.3, 1), 1.0)
-            art_bonus_inj = 0.3 if "200" in article_nums else 0.0
-            base_inj = 0.82 + (len(rec_text) % 13) * 0.0061
-            display_inj = min(base_inj + bm25_inj * 0.07 + art_bonus_inj * 0.05, 0.999)
-            type_boost_inj = NORM_TYPE_BOOST.get(inj["norm_type"], 1.0)
-            hybrid_inj = (16.0 + bm25_inj * 3.0 + art_bonus_inj * 2.0 + (len(rec_text) % 17) * 0.04) * type_boost_inj
-            candidates.append({
-                "law_name": inj["law_name"],
-                "article_number": inj["article_number"],
-                "original_text": inj["original_text"],
-                "violation_criteria": inj["violation_criteria"],
-                "applicable_measures": inj["applicable_measures"],
-                "norm_type": inj["norm_type"],
-                "norm_purpose": "violation",
-                "organ": "",
-                "is_injected": True,
-                "score": round(display_inj, 4),
-                "_hybrid": round(hybrid_inj, 4),
-                "_bm25": round(bm25_inj, 4),
-                "_emb": round(base_inj, 4),
-                "_kw_hits": kw_hits_inj,
-            })
+        # ── КоАП-200 (alcohol) injection — УДАЛЕНО в Фазе 4 ────────────────
+        # Реальные нормы КоАП «Статья 200» есть в базе и теперь достаются через
+        # violations-под-запрос + RRF (см. eval/diagnose_phase4.py). Хардкод-инъекция
+        # была избыточна и вредна: клала дубль с article_number="200" (не матчит
+        # эталон «Статья 200») и, как is_injected, занимала верхний слот, сдвигая
+        # реальную норму вниз. Никаких хардкод-инъекций статей — только retrieval.
 
         # Apply strict category exclusions:
         # 1. Уголовный кодекс (suspect's criminal articles)
@@ -739,6 +721,7 @@ class RAGLawsService:
         organ_filter: str | None = None,
         raw_query: str | None = None,
         violations: list[dict] | None = None,
+        source_patterns: list[str] | None = None,
     ) -> list[dict]:
         """Decompose case facts into focused sub-queries and merge results.
 
@@ -840,61 +823,52 @@ class RAGLawsService:
             len(queries), len(facts),
         )
 
-        # Run each sub-query and merge results
+        # Слияние под-запросов через Reciprocal Rank Fusion (RRF).
+        # RRF надёжнее взвешенной суммы скоров: норма, высоко стоящая в ЛЮБОМ
+        # под-запросе, получает вес, и веса под-запросов не подгоняются под кейс.
+        # score(d) = Σ 1/(K + rank_in_subquery), K=60.
+        RRF_K = 60
         all_candidates: dict[tuple[str, str], dict] = {}
+        rrf_score: dict[tuple[str, str], float] = {}
 
-        # A. First run the explicit user raw_query with high priority and direct boost
-        raw_keys = set()
-        if raw_query and raw_query.strip():
-            raw_results = self.search(query=raw_query.strip()[:3000], top_k=top_k, organ_filter=organ_filter)
-            for r in raw_results:
+        def _absorb(results: list[dict], extra: float = 0.0) -> None:
+            for rank, r in enumerate(results, 1):
                 key = (r["law_name"], r["article_number"])
-                raw_keys.add(key)
-                r["_raw_boosted"] = True
-                # Boost raw score using a soft asymptotic scale with deterministic tiebreaker
-                text_len_hash = len(r.get("original_text", "")) + len(r.get("law_name", ""))
-                tiebreaker = (text_len_hash % 11) * 0.0007
-                r["score"] = round(min(r["score"] + 0.12 * (1.0 - r["score"]) + tiebreaker, 0.999), 4)
-                all_candidates[key] = r
-
-        # B. Run all other decomposed background sub-queries
-        for q in queries:
-            results = self.search(query=q[:3000], top_k=top_k, organ_filter=organ_filter)
-            for r in results:
-                key = (r["law_name"], r["article_number"])
-                # Keep the explicit raw query version if present
-                if key in raw_keys:
-                    if r.get("is_injected", False):
-                        all_candidates[key]["is_injected"] = True
-                    continue
+                rrf_score[key] = rrf_score.get(key, 0.0) + 1.0 / (RRF_K + rank) + extra
                 if key not in all_candidates:
                     all_candidates[key] = r
                 else:
-                    existing = all_candidates[key]
-                    is_inj = existing.get("is_injected", False) or r.get("is_injected", False)
-                    if r["score"] > existing["score"]:
-                        existing.update(r)
-                    existing["is_injected"] = is_inj
+                    ex = all_candidates[key]
+                    if r.get("score", 0.0) > ex.get("score", 0.0):
+                        ex.update(r)
+                    if r.get("is_injected", False):
+                        ex["is_injected"] = True
 
-        # Sort: first prioritize is_injected, then score, then raw_boosted descending
+        # Явный raw_query — небольшой доп. вес (как ещё один под-запрос ранга #1).
+        if raw_query and raw_query.strip():
+            _absorb(self.search(query=raw_query.strip()[:3000], top_k=top_k,
+                                organ_filter=organ_filter, source_patterns=source_patterns),
+                    extra=1.0 / (RRF_K + 1))
+        for q in queries:
+            _absorb(self.search(query=q[:3000], top_k=top_k,
+                                organ_filter=organ_filter, source_patterns=source_patterns))
+
+        # Сортировка по RRF (инъекция, если есть, — мягкий приоритет первым ключом).
         merged = sorted(
             all_candidates.values(),
             key=lambda x: (
                 1 if x.get("is_injected", False) else 0,
-                x.get("score", 0.0),
-                1 if x.get("_raw_boosted", False) else 0
+                rrf_score.get((x["law_name"], x["article_number"]), 0.0),
             ),
-            reverse=True
+            reverse=True,
         )
-        # Clean up temporary keys
         for r in merged:
             r.pop("is_injected", None)
             r.pop("_raw_boosted", None)
 
         result = merged[:top_k]
-
         logger.info(
-            "search_multi_query: merged %d unique norms from %d queries, returning top %d",
+            "search_multi_query: RRF-merged %d unique norms from %d sub-queries, top %d",
             len(all_candidates), len(queries) + (1 if raw_query else 0), len(result),
         )
         return result

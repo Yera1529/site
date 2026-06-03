@@ -210,6 +210,23 @@ async def search_laws(
     settings = get_settings()
     logger.info("search-laws: query_len=%d ai_rerank=%s", len(query_text), settings.enable_ai_rerank)
 
+    # L1 Domain Router (Фаза 3): классифицируем дело и ограничиваем подбор норм
+    # пулом источников домена (убирает кросс-доменные «магниты», напр. Трудовой
+    # кодекс на делах охраны). На любой ошибке — graceful fallback:
+    # source_patterns=None = поиск по всей базе, как раньше.
+    source_patterns = None
+    if settings.enable_domain_router:
+        try:
+            from services.domain_router import classify_domain, domain_source_patterns
+            r_domain, r_conf = await classify_domain(
+                base_facts_text, viol_text, data.addressee or "", AIService()
+            )
+            source_patterns = domain_source_patterns(r_domain) or None
+            logger.info("search-laws: domain=%s conf=%.2f pool_sources=%d",
+                        r_domain, r_conf, len(source_patterns or []))
+        except Exception as e:
+            logger.warning("search-laws: domain router failed: %s", e)
+
     laws: list[dict] = []
 
     # When AI rerank is on, fetch a wider candidate pool so the reranker has
@@ -228,6 +245,7 @@ async def search_laws(
             top_k=fetch_k,
             raw_query=data.query,
             violations=data.violations,
+            source_patterns=source_patterns,
         )
         logger.info("search-laws: FAISS returned %d norms", len(jsonl_norms))
         for norm in jsonl_norms:

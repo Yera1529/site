@@ -263,7 +263,7 @@ export default function ChatPanel({ matterId, messages, onMessagesUpdated }: Cha
           </button>
         </div>
         <p className="text-center text-[10px] text-gray-400 mt-2">
-          ИИ может допускать ошибки. Проверяйте важную информацию. • Qwen3-30B
+          ИИ может допускать ошибки. Проверяйте важную информацию. • Gemini
         </p>
       </div>
     </div>
