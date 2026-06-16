@@ -35,7 +35,7 @@ services:
       EMBEDDING_MODEL: intfloat/multilingual-e5-base
       STORAGE_DIR: /app/storage
       MAX_UPLOAD_BYTES: "52428800"
-      CORS_ORIGINS: http://localhost:3000,http://127.0.0.1:3000,http://109.196.101.168:3000
+      CORS_ORIGINS: http://localhost:3000,http://127.0.0.1:3000,http://201.51.9.240:3000
       VERTEX_AI_PROJECT: "gen-lang-client-0615048966"
       VERTEX_AI_LOCATION: "us-central1"
       GOOGLE_APPLICATION_CREDENTIALS: /app/credentials.json
@@ -60,7 +60,7 @@ services:
     ports:
       - "3000:3000"
     environment:
-      NEXT_PUBLIC_API_URL: http://109.196.101.168:8000
+      NEXT_PUBLIC_API_URL: http://201.51.9.240:8000
       HOSTNAME: "0.0.0.0"
     volumes:
       - ./frontend/src:/app/src
