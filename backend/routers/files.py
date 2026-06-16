@@ -70,7 +70,8 @@ async def upload_file(
                    f"Допустимые: {', '.join(sorted('.' + e for e in ALLOWED_EXTENSIONS))}.",
         )
 
-    content = await file.read()
+    # Читаем не больше лимита+1 байта — не даём гигабайтному файлу заполнить память.
+    content = await file.read(settings.max_upload_bytes + 1)
 
     if not content:
         raise HTTPException(status_code=400, detail="Файл пуст.")

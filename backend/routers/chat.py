@@ -37,6 +37,7 @@ from services.ai import AIService, validate_representation, validate_law_citatio
 from services.rag import RAGService
 from services.rag_laws import RAGLawsService
 from services.document import DocumentService
+from services.storage import StorageService
 from models.template import DocumentTemplate
 
 logger = logging.getLogger(__name__)
@@ -704,10 +705,19 @@ async def export_docx(
     user: User = Depends(get_current_user),
 ):
     doc_service = DocumentService()
-    file_path = doc_service.html_to_docx(data.html, data.filename)
+    try:
+        file_path = doc_service.html_to_docx(data.html, data.filename)
+    except Exception as e:
+        # Невалидный/повреждённый HTML (управляющие символы и т.п.) не должен
+        # ронять сервер в 500 — отдаём понятную 400.
+        logger.warning("export_docx failed: %s", e)
+        raise HTTPException(status_code=400, detail="Не удалось сформировать DOCX из переданного HTML.")
 
+    # На диск имя санитизируется внутри html_to_docx; для заголовка скачивания
+    # тоже берём только безопасное базовое имя.
+    download_name = StorageService._sanitize_filename(data.filename) or "document.docx"
     return FileResponse(
         path=file_path,
-        filename=data.filename,
+        filename=download_name,
         media_type="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
     )

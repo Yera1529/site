@@ -9,6 +9,12 @@ from config import get_settings
 
 
 class StorageService:
+    # Защита от «zip-бомбы»: docx/odt — это zip-архивы. Ограничиваем суммарный
+    # распакованный размер и число элементов, иначе вредоносный файл может
+    # исчерпать память контейнера при извлечении текста.
+    _MAX_UNCOMPRESSED_BYTES = 300 * 1024 * 1024  # 300 МБ суммарно
+    _MAX_ZIP_ENTRIES = 5000
+
     def __init__(self):
         settings = get_settings()
         self.base_dir = Path(settings.storage_dir)
@@ -17,12 +23,38 @@ class StorageService:
         self.uploads_dir.mkdir(parents=True, exist_ok=True)
         self.generated_dir.mkdir(parents=True, exist_ok=True)
 
+    @staticmethod
+    def _sanitize_filename(filename: str) -> str:
+        """Защита от path traversal: только базовое имя, без разделителей путей
+        и спецсимволов. Возвращает безопасное имя (без каталогов)."""
+        base = os.path.basename(filename or "")
+        base = "".join(c if (c.isalnum() or c in " .-_()№") else "_" for c in base)
+        base = base.strip(" .") or "file"      # не допускаем пустое/только-точки имя
+        return base[:120]
+
+    @staticmethod
+    def _assert_zip_safe(path: str) -> None:
+        """Проверяет zip-контейнер (docx/odt) на «zip-бомбу» ДО распаковки.
+
+        Бросает ValueError, если суммарный распакованный размер или число
+        элементов превышают лимиты. Вызывающий код перехватывает исключение
+        и возвращает безопасное сообщение об ошибке.
+        """
+        import zipfile
+        with zipfile.ZipFile(path, "r") as z:
+            infos = z.infolist()
+            if len(infos) > StorageService._MAX_ZIP_ENTRIES:
+                raise ValueError("Документ содержит слишком много элементов (возможна zip-бомба).")
+            total = sum(i.file_size for i in infos)
+            if total > StorageService._MAX_UNCOMPRESSED_BYTES:
+                raise ValueError("Распакованный размер документа превышает лимит (возможна zip-бомба).")
+
     def save_file(self, matter_id: str, filename: str, content: bytes) -> str:
         """Save an uploaded file and return its relative storage path."""
         matter_dir = self.uploads_dir / matter_id
         matter_dir.mkdir(parents=True, exist_ok=True)
 
-        safe_name = f"{uuid.uuid4().hex}_{filename}"
+        safe_name = f"{uuid.uuid4().hex}_{self._sanitize_filename(filename)}"
         file_path = matter_dir / safe_name
         file_path.write_bytes(content)
         return str(file_path.relative_to(self.base_dir))
@@ -73,6 +105,7 @@ class StorageService:
         paragraphs, tables (with cell content), and headers/footers.
         docx2txt misses tables which often contain names, dates, case numbers.
         """
+        StorageService._assert_zip_safe(path)
         from docx import Document as DocxDocument
         doc = DocxDocument(path)
         parts = []
@@ -113,6 +146,11 @@ class StorageService:
         python-docx does NOT support .doc, only .docx.
         docx2txt handles both formats.
         """
+        import zipfile
+        # Если .doc на деле OOXML-zip (docx2txt читает его как zip) — проверяем на
+        # zip-бомбу. Настоящий бинарный .doc не zip → проверку пропускаем.
+        if zipfile.is_zipfile(path):
+            StorageService._assert_zip_safe(path)
         try:
             text = docx2txt.process(path)
             if text and text.strip():
@@ -150,6 +188,7 @@ class StorageService:
         """Extract text from ODT (ZIP of XML) files."""
         import zipfile
         import re
+        StorageService._assert_zip_safe(path)
         with zipfile.ZipFile(path, "r") as z:
             if "content.xml" not in z.namelist():
                 return ""

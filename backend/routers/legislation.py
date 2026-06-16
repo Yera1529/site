@@ -259,16 +259,30 @@ async def import_legislation_jsonl(
     # Parse JSONL lines
     text = content_bytes.decode("utf-8", errors="ignore")
     records: list[dict] = []
+    MAX_JSONL_RECORDS = 20000
     for line_num, line in enumerate(text.splitlines(), 1):
         line = line.strip()
         if not line:
             continue
         try:
-            records.append(json.loads(line))
+            obj = json.loads(line)
         except json.JSONDecodeError:
             raise HTTPException(
                 status_code=400,
                 detail=f"Ошибка JSON в строке {line_num}",
+            )
+        # Валидная JSON-строка может не быть объектом (число/массив/null) —
+        # дальше rec.get(...) бросил бы AttributeError → 500. Отсекаем явно.
+        if not isinstance(obj, dict):
+            raise HTTPException(
+                status_code=400,
+                detail=f"Строка {line_num}: ожидается JSON-объект",
+            )
+        records.append(obj)
+        if len(records) > MAX_JSONL_RECORDS:
+            raise HTTPException(
+                status_code=413,
+                detail=f"Слишком много записей (> {MAX_JSONL_RECORDS}).",
             )
 
     if not records:

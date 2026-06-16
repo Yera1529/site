@@ -744,10 +744,15 @@ class RAGLawsService:
         # 0. Form explicit prioritized subqueries from violations if present
         if violations:
             for v in violations:
-                desc = v.get("description", "")
-                resp = v.get("responsible", "")
-                if desc and desc.strip():
-                    violation_query = f"{desc.strip()} {resp.strip()}".strip()
+                # Безопасное приведение: значение поля может быть None или не-строкой
+                # (.get(key, "") НЕ спасает от None-значения) → иначе .strip() кидает
+                # AttributeError, ошибка глотается выше и подбор молча даёт 0 норм.
+                if not isinstance(v, dict):
+                    continue
+                desc = str(v.get("description") or "").strip()
+                resp = str(v.get("responsible") or "").strip()
+                if desc:
+                    violation_query = f"{desc} {resp}".strip()
                     if violation_query:
                         queries.append(violation_query)
 

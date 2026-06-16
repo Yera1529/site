@@ -1,6 +1,8 @@
 """Authentication routes: register, login, password reset, and current-user lookup."""
 
 import hashlib
+import logging
+import os
 import uuid
 from datetime import datetime, timedelta, timezone
 from typing import Optional
@@ -23,8 +25,15 @@ security = HTTPBearer(auto_error=False)  # auto_error=False so DEV bypass works 
 settings = get_settings()
 
 # ── DEV-MODE: bypass authentication ──
-# Set to True to skip JWT validation and use a fake admin user
-DEV_BYPASS = True
+# Управляется переменной окружения DEV_BYPASS. По умолчанию ВЫКЛ (auth включён),
+# чтобы обход НЕ уехал в прод хардкодом. Для демо без авторизации задайте
+# DEV_BYPASS=true в окружении (docker-compose). Когда добавите реальный auth —
+# просто уберите эту переменную из окружения сервера.
+DEV_BYPASS = os.getenv("DEV_BYPASS", "false").strip().lower() in ("true", "1", "yes")
+if DEV_BYPASS:
+    logging.getLogger(__name__).warning(
+        "DEV_BYPASS включён — авторизация ОТКЛЮЧЕНА (допустимо только для демо/разработки!)"
+    )
 _DEV_EMAIL = "admin@dev.local"
 _DEV_NAME = "Разработчик (Тест)"
 

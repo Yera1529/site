@@ -10,6 +10,18 @@ from docx.enum.text import WD_ALIGN_PARAGRAPH
 from docx.oxml.ns import qn
 from docx.oxml import OxmlElement
 from config import get_settings
+from services.storage import StorageService
+
+
+# Символы, недопустимые в XML 1.0 (docx — это XML): управляющие C0 кроме
+# tab/LF/CR, непарные суррогаты и noncharacters. python-docx бросает на них
+# ValueError «All strings must be XML compatible» → 500 при экспорте. Вырезаем.
+_XML_INVALID = re.compile(r"[\x00-\x08\x0b\x0c\x0e-\x1f\ud800-\udfff]")
+
+
+def _xml_safe(text: str) -> str:
+    """Удаляет из текста символы, недопустимые в XML/docx (защита от 500 при экспорте)."""
+    return _XML_INVALID.sub("", text) if text else text
 
 
 ALIGN_MAP = {
@@ -45,7 +57,7 @@ class _DocParser(HTMLParser):
         text = text.replace("&gt;", ">")
         text = text.replace("&#160;", " ")
         text = re.sub(r"&[a-z]+;", "", text)
-        return text
+        return _xml_safe(text)
 
     @staticmethod
     def _get_align(attrs_dict: dict) -> str:
@@ -169,11 +181,15 @@ class _DocParser(HTMLParser):
         self._buf.append(entities.get(name, ""))
 
     def handle_charref(self, name: str):
-        if name.startswith("x"):
-            c = chr(int(name[1:], 16))
-        else:
-            c = chr(int(name))
-        self._buf.append(c if c != "\xa0" else " ")
+        # Числовые ссылки могут давать недопустимые для XML символы (&#11; → \x0b)
+        # или выходить за диапазон chr() → защищаемся, иначе экспорт DOCX падает 500.
+        try:
+            c = chr(int(name[1:], 16)) if name.startswith("x") else chr(int(name))
+        except (ValueError, OverflowError):
+            return
+        c = " " if c == "\xa0" else _xml_safe(c)
+        if c:
+            self._buf.append(c)
 
 
 def _parse_html_ordered(html: str) -> list[dict]:
@@ -199,6 +215,7 @@ class DocumentService:
 
     def docx_to_html(self, docx_path: str) -> str:
         """Parse a DOCX file and return structured HTML suitable for TipTap."""
+        StorageService._assert_zip_safe(docx_path)  # защита от zip-бомбы (docx — это zip)
         doc = Document(docx_path)
         html_parts = []
 
@@ -372,7 +389,9 @@ class DocumentService:
                 run.font.size = Pt(14)
                 run.font.color.rgb = RGBColor(0, 0, 0)
 
-        safe_filename = f"{uuid.uuid4().hex}_{filename}"
+        # Санитизация имени против path traversal (filename приходит от клиента):
+        # на диск пишем uuid + только безопасное базовое имя.
+        safe_filename = f"{uuid.uuid4().hex}_{StorageService._sanitize_filename(filename)}"
         file_path = self.generated_dir / safe_filename
         doc.save(str(file_path))
         return str(file_path)

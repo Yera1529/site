@@ -3,6 +3,7 @@
 import { useState, useRef, useEffect } from "react";
 import { ChatMessage } from "@/types";
 import { api } from "@/lib/api";
+import { sanitizeHtml } from "@/lib/sanitize";
 import { Send, Loader2, Bot, User, Sparkles, ChevronDown, ChevronRight } from "lucide-react";
 import { motion, AnimatePresence } from "framer-motion";
 
@@ -42,7 +43,7 @@ function AssistantContent({
         </div>
       )}
       {isHtml ? (
-        <div className="chat-html-content" dangerouslySetInnerHTML={{ __html: body }} />
+        <div className="chat-html-content" dangerouslySetInnerHTML={{ __html: sanitizeHtml(body) }} />
       ) : (
         <div style={{ whiteSpace: "pre-wrap" }}>{body}</div>
       )}
@@ -215,7 +216,7 @@ export default function ChatPanel({ matterId, messages, onMessagesUpdated }: Cha
             </div>
             <div className="chat-bubble-ai generating-shimmer">
               {streamContent ? (
-                <div className="text-sm leading-relaxed relative z-10 break-words chat-html-content" style={{ overflowWrap: "anywhere", wordBreak: "break-word" }} dangerouslySetInnerHTML={{ __html: streamContent }} />
+                <div className="text-sm leading-relaxed relative z-10 break-words chat-html-content" style={{ overflowWrap: "anywhere", wordBreak: "break-word" }} dangerouslySetInnerHTML={{ __html: sanitizeHtml(streamContent) }} />
               ) : (
                 <div className="flex items-center gap-2 py-1">
                   <div className="thinking-dots flex gap-1.5">

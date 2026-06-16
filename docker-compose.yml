@@ -39,6 +39,9 @@ services:
       VERTEX_AI_PROJECT: "gen-lang-client-0615048966"
       VERTEX_AI_LOCATION: "us-central1"
       GOOGLE_APPLICATION_CREDENTIALS: /app/credentials.json
+      # ВРЕМЕННО для демо: авторизация отключена. Когда добавите реальный auth —
+      # удалите эту строку (в коде дефолт DEV_BYPASS=false, auth включится).
+      DEV_BYPASS: "true"
     volumes:
       - ./backend:/app
       - backend_storage:/app/storage

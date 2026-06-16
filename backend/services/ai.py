@@ -17,6 +17,52 @@ from config import get_settings
 
 logger = logging.getLogger(__name__)
 
+# ── Серверная очистка HTML (defense-in-depth; основная защита — DOMPurify на фронте) ──
+# Документ-представление генерируется LLM из фабулы/файлов дела (ввод пользователя),
+# поэтому без очистки возможен XSS. Убираем опасные теги, обработчики событий и URL,
+# сохраняя форматирование (p/h1/h2/span/div/ol/li + inline-стили float/text-align).
+_RE_SCRIPTISH = re.compile(
+    r"<\s*(script|style|iframe|object|embed|link|meta|base|form|svg|math)\b[^>]*>.*?<\s*/\s*\1\s*>",
+    re.IGNORECASE | re.DOTALL,
+)
+_RE_SELFCLOSE_DANGER = re.compile(
+    r"<\s*(script|iframe|object|embed|link|meta|base)\b[^>]*?/?>", re.IGNORECASE
+)
+_RE_ON_HANDLERS = re.compile(r"""\son\w+\s*=\s*("[^"]*"|'[^']*'|[^\s>]+)""", re.IGNORECASE)
+# URL-атрибуты, значение которых проверяем на опасную схему.
+_RE_URL_ATTR = re.compile(
+    r"""(\b(?:href|src|xlink:href|action|formaction|poster|background)\s*=\s*)(["'])(.*?)\2""",
+    re.IGNORECASE | re.DOTALL,
+)
+# Последовательности, которые браузер ИГНОРИРУЕТ внутри URL: HTML-сущности
+# tab/LF/CR и сырые управляющие/пробельные символы. Удаляем ПЕРЕД проверкой схемы,
+# иначе "javascript&#9;:" обходит фильтр, а браузер склеивает обратно в "javascript:".
+_RE_URL_IGNORED = re.compile(
+    r"&#0*9;|&#0*10;|&#0*13;|&#x0*9;|&#x0*a;|&#x0*d;|&Tab;|&NewLine;|[\x00-\x20\xa0]",
+    re.IGNORECASE,
+)
+_RE_BAD_SCHEME = re.compile(r"^(?:javascript|vbscript|data|file)\s*:", re.IGNORECASE)
+
+
+def _neutralize_url_attr(m: "re.Match") -> str:
+    """Обнуляет URL-атрибут (→ #), если после нормализации схема опасна."""
+    prefix, quote, val = m.group(1), m.group(2), m.group(3)
+    normalized = _RE_URL_IGNORED.sub("", val)
+    if _RE_BAD_SCHEME.match(normalized):
+        return f"{prefix}{quote}#{quote}"
+    return m.group(0)
+
+
+def _sanitize_html(html: str) -> str:
+    """Лёгкая очистка сгенерированного HTML от XSS-векторов."""
+    if not html:
+        return html
+    html = _RE_SCRIPTISH.sub("", html)
+    html = _RE_SELFCLOSE_DANGER.sub("", html)
+    html = _RE_ON_HANDLERS.sub("", html)
+    html = _RE_URL_ATTR.sub(_neutralize_url_attr, html)
+    return html
+
 # ---------------------------------------------------------------------------
 # Eight mandatory sections derived from the official Instruction (ст.200 УПК)
 # ---------------------------------------------------------------------------
@@ -847,8 +893,14 @@ class AIService:
                 "Следователь привязал конкретные нормы к конкретным нарушениям:\n\n"
             )
             for law_idx_str, viol_idx in norm_violation_bindings.items():
-                law_idx = int(law_idx_str)
-                if law_idx < len(retrieved_laws) and viol_idx < len(structured_violations):
+                # Ключ/значение приходят от клиента — не доверяем типу: нечисловой
+                # ключ ронял генерацию в 500 (int(...) → ValueError).
+                try:
+                    law_idx = int(law_idx_str)
+                    viol_idx = int(viol_idx)
+                except (ValueError, TypeError):
+                    continue
+                if 0 <= law_idx < len(retrieved_laws) and 0 <= viol_idx < len(structured_violations):
                     law = retrieved_laws[law_idx]
                     viol = structured_violations[viol_idx]
                     bind_section += (
@@ -1055,7 +1107,7 @@ class AIService:
             if len(fb) > len(text):
                 text = fb
 
-        return text
+        return _sanitize_html(text)
 
     async def _call_llm(
         self,
@@ -1189,12 +1241,20 @@ class AIService:
 [{{"index": <номер нормы>, "score": <0-100>, "reason": "<краткое обоснование>"}}]"""
 
         try:
-            config = genai_types.GenerateContentConfig(
+            # Gemini 2.5 Flash — «думающая» модель: дефолтный thinking добавляет
+            # 30–120 с латентности на реранк (узкое место подбора норм в демо).
+            # Реранк — это скоринг кандидатов, а не рассуждение; отключаем thinking
+            # (budget=0) → кратно быстрее без потери качества ранжирования.
+            # hasattr-guard — на случай старого SDK без ThinkingConfig.
+            cfg_args = dict(
                 temperature=0.0,
                 top_p=0.9,
                 max_output_tokens=65536,
                 response_mime_type="application/json",
             )
+            if hasattr(genai_types, "ThinkingConfig"):
+                cfg_args["thinking_config"] = genai_types.ThinkingConfig(thinking_budget=0)
+            config = genai_types.GenerateContentConfig(**cfg_args)
 
             response = await asyncio.to_thread(
                 self._client.models.generate_content,

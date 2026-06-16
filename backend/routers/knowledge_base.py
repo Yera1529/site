@@ -15,6 +15,7 @@ from models.user import User
 from models.knowledge_base import KBDocument
 from routers.auth import get_current_user, require_admin
 from services.rag import RAGService
+from services.storage import StorageService
 
 router = APIRouter(prefix="/api/knowledge-base", tags=["knowledge-base"])
 
@@ -118,7 +119,7 @@ async def upload_kb_document(
 
     docs_dir = Path(settings.storage_dir) / "documents" / "representations"
     docs_dir.mkdir(parents=True, exist_ok=True)
-    safe_name = f"{uuid.uuid4().hex}_{file.filename}"
+    safe_name = f"{uuid.uuid4().hex}_{StorageService._sanitize_filename(file.filename)}"
     (docs_dir / safe_name).write_text(text, encoding="utf-8")
 
     doc_id = uuid.uuid4()
@@ -185,7 +186,7 @@ async def upload_kb_batch(
         title_match = re.search(r"^#\s+(.+)", text, re.MULTILINE)
         title = title_match.group(1).strip() if title_match else file.filename
 
-        safe_name = f"{uuid.uuid4().hex}_{file.filename}"
+        safe_name = f"{uuid.uuid4().hex}_{StorageService._sanitize_filename(file.filename)}"
         (docs_dir / safe_name).write_text(text, encoding="utf-8")
 
         doc_id = uuid.uuid4()

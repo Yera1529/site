@@ -11,6 +11,7 @@ import FontFamily from "@tiptap/extension-font-family";
 import Highlight from "@tiptap/extension-highlight";
 import { Extension, Mark } from "@tiptap/core";
 import { api } from "@/lib/api";
+import { sanitizeHtml } from "@/lib/sanitize";
 import { useState, useCallback, useEffect, useRef } from "react";
 import {
   Bold,
@@ -173,7 +174,9 @@ export default function DocumentEditor({
       prevContentRef.current = content;
       const currentHTML = editor.getHTML();
       if (content !== currentHTML) {
-        editor.commands.setContent(content);
+        // Санитизация перед инъекцией в редактор (защита от XSS в HTML,
+        // пришедшем от LLM/шаблона). Форматирование (float/выравнивание) сохраняется.
+        editor.commands.setContent(sanitizeHtml(content));
       }
     }
   }, [editor, content]);
